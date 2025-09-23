@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
 
 async function main() {
     await RAPIER.init();
@@ -25,6 +26,7 @@ camera.lookAt(0, 0, 0);
 // 3. Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
 // 4. Lighting
@@ -37,6 +39,15 @@ scene.add(directionalLight);
 
     // 5. Create Game Elements
 
+    let reticle;
+    reticle = new THREE.Mesh(
+        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial()
+    );
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
+
     // Visual ground
     const groundSize = { width: 20, height: 0.2, depth: 20 };
     const groundGeometry = new THREE.BoxGeometry(groundSize.width, groundSize.height, groundSize.depth);
@@ -44,6 +55,7 @@ scene.add(directionalLight);
     const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
     groundMesh.position.y = -0.1; // Match the physics ground
     scene.add(groundMesh);
+    groundMesh.visible = false;
 
     // Array to hold dynamic objects
     let dynamicObjects = [];
@@ -96,60 +108,130 @@ scene.add(directionalLight);
     }
 
 
-    // 6. Animation Loop
-    function animate() {
-        requestAnimationFrame(animate);
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+    let placementMatrix = new THREE.Matrix4();
+    let isScenePlaced = false;
 
-        // Step the physics world
+    // 6. Animation Loop
+    function animate(timestamp, frame) {
+        // Step the physics world first
         world.step();
+
+        if (frame) {
+            const referenceSpace = renderer.xr.getReferenceSpace();
+            const session = renderer.xr.getSession();
+
+            if (hitTestSourceRequested === false) {
+                session.requestReferenceSpace('viewer').then(function (referenceSpace) {
+                    session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
+                        hitTestSource = source;
+                    });
+                });
+                hitTestSourceRequested = true;
+            }
+
+            if (hitTestSource) {
+                const hitTestResults = frame.getHitTestResults(hitTestSource);
+                if (hitTestResults.length && isScenePlaced === false) {
+                    const hit = hitTestResults[0];
+                    reticle.visible = true;
+                    reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
+                } else {
+                    reticle.visible = false;
+                }
+            }
+        }
 
         // Update all dynamic objects
         dynamicObjects.forEach(obj => {
-            obj.mesh.position.copy(obj.body.translation());
-            obj.mesh.quaternion.copy(obj.body.rotation());
+            const body = obj.body;
+            const mesh = obj.mesh;
+
+            const position = new THREE.Vector3().copy(body.translation());
+            const quaternion = new THREE.Quaternion().copy(body.rotation());
+
+            const physicsMatrix = new THREE.Matrix4().compose(position, quaternion, new THREE.Vector3(1, 1, 1));
+            const finalMatrix = new THREE.Matrix4().multiplyMatrices(placementMatrix, physicsMatrix);
+
+            mesh.position.setFromMatrixPosition(finalMatrix);
+            mesh.quaternion.setFromRotationMatrix(finalMatrix);
         });
+
+        // Also update the static ground mesh
+        groundMesh.position.setFromMatrixPosition(placementMatrix);
+        groundMesh.quaternion.setFromRotationMatrix(placementMatrix);
+
 
         renderer.render(scene, camera);
     }
 
     // User Interaction
 
-    // Left-click to throw
+    // Left-click to throw (Desktop only)
     window.addEventListener('click', () => {
+        if (renderer.xr.isPresenting) return;
         const ball = dynamicObjects.find(obj => obj.isBall);
         if (ball) {
-            // Only throw if the ball is reasonably still at the start
             const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
             if (isIdle) {
-                 ball.body.applyImpulse({ x: 0, y: 0, z: -0.4 }, true); // Tuned force based on user feedback
+                 ball.body.applyImpulse({ x: 0, y: 0, z: -0.4 }, true);
             }
         }
     });
 
     // Right-click to reset
     window.addEventListener('contextmenu', (event) => {
-        event.preventDefault(); // Prevent default context menu
-        // Reset all dynamic objects
+        event.preventDefault();
+
         dynamicObjects.forEach(obj => {
             obj.body.setTranslation(obj.initialPosition, true);
-            obj.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true); // Reset rotation to stand upright
+            obj.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
             obj.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
             obj.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         });
+
+        if (renderer.xr.isPresenting) {
+            isScenePlaced = false;
+            groundMesh.visible = false;
+            placementMatrix.identity();
+        }
     });
 
 // 7. Handle Window Resizing
     window.addEventListener('resize', () => {
-    // Update camera aspect ratio
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-
-    // Update renderer size
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
     // Start the animation
-    animate();
+    renderer.setAnimationLoop(animate);
+
+    const controller = renderer.xr.getController(0);
+    controller.addEventListener('select', () => {
+        if (isScenePlaced === false) {
+            if (reticle.visible) {
+                placementMatrix.fromArray(reticle.matrix.elements);
+                isScenePlaced = true;
+                groundMesh.visible = true;
+                reticle.visible = false;
+            }
+        } else {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
+                if (isIdle) {
+                    const placementQuaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
+                    const impulse = new THREE.Vector3(0, 0, -0.4).applyQuaternion(placementQuaternion);
+                    ball.body.applyImpulse(impulse, true);
+                }
+            }
+        }
+    });
+    scene.add(controller);
+
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
 }
 
 main();
