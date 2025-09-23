@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 async function main() {
     await RAPIER.init();
@@ -39,6 +40,8 @@ scene.add(directionalLight);
 
     // 5. Create Game Elements
 
+    const loader = new GLTFLoader();
+
     let reticle;
     reticle = new THREE.Mesh(
         new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
@@ -61,10 +64,11 @@ scene.add(directionalLight);
     let dynamicObjects = [];
 
     // Create Bowling Ball
-    const ballRadius = 0.2;
-    const ballGeometry = new THREE.SphereGeometry(ballRadius, 32, 32);
-    const ballMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.2 });
-    const ballMesh = new THREE.Mesh(ballGeometry, ballMaterial);
+    const ballGltf = await loader.loadAsync('3d/bowling_ball.glb');
+    const ballMesh = ballGltf.scene;
+    const ballBox = new THREE.Box3().setFromObject(ballMesh);
+    const ballSize = ballBox.getSize(new THREE.Vector3());
+    const ballRadius = ballSize.x / 2;
 
     const ballInitialPosition = { x: 0, y: 0.5, z: 8 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
@@ -76,18 +80,36 @@ scene.add(directionalLight);
     scene.add(ballMesh);
 
     // Create Bowling Pins
-    const pinHeight = 0.5;
-    const pinRadius = 0.05;
-    const pinGeometry = new THREE.CylinderGeometry(pinRadius, pinRadius, pinHeight, 16);
-    const pinMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const pinGltf = await loader.loadAsync('3d/bowling_pin.glb');
+    const pinModel = pinGltf.scene;
+    const pinBox = new THREE.Box3().setFromObject(pinModel);
+    const pinSize = pinBox.getSize(new THREE.Vector3());
+    const pinHeight = pinSize.y;
+    const pinRadius = Math.max(pinSize.x, pinSize.z) / 2;
 
     function createPin(x, z) {
-        const pinMesh = new THREE.Mesh(pinGeometry, pinMaterial);
+        const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: pinHeight / 2, z: z };
 
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
-        const pinColliderDesc = RAPIER.ColliderDesc.cylinder(pinHeight / 2, pinRadius);
+
+        // Create a compound shape for more realistic physics
+        const shapes = [
+            // Bottom capsule
+            [
+                { x: 0, y: -pinHeight * 0.2, z: 0 }, // translation
+                { x: 0, y: 0, z: 0, w: 1 },         // rotation
+                RAPIER.ColliderDesc.capsule(pinHeight * 0.3, pinRadius)
+            ],
+            // Top capsule
+            [
+                { x: 0, y: pinHeight * 0.25, z: 0 }, // translation
+                { x: 0, y: 0, z: 0, w: 1 },          // rotation
+                RAPIER.ColliderDesc.capsule(pinHeight * 0.25, pinRadius * 0.8)
+            ]
+        ];
+        const pinColliderDesc = RAPIER.ColliderDesc.compound(shapes);
         world.createCollider(pinColliderDesc, pinBody);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
