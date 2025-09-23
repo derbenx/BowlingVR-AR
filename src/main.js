@@ -93,23 +93,17 @@ scene.add(directionalLight);
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
-        // Create a compound shape for more realistic physics
-        const shapes = [
-            // Bottom capsule
-            [
-                { x: 0, y: -pinHeight * 0.2, z: 0 }, // translation
-                { x: 0, y: 0, z: 0, w: 1 },         // rotation
-                RAPIER.ColliderDesc.capsule(pinHeight * 0.3, pinRadius)
-            ],
-            // Top capsule
-            [
-                { x: 0, y: pinHeight * 0.25, z: 0 }, // translation
-                { x: 0, y: 0, z: 0, w: 1 },          // rotation
-                RAPIER.ColliderDesc.capsule(pinHeight * 0.25, pinRadius * 0.8)
-            ]
-        ];
-        const pinColliderDesc = RAPIER.ColliderBuilder.compound(shapes);
-        world.createCollider(pinColliderDesc, pinBody);
+        // Create multiple colliders and attach them to the same body to form a compound shape.
+
+        // Bottom capsule
+        const bottomCapsuleDesc = RAPIER.ColliderDesc.capsule(pinHeight * 0.3, pinRadius)
+            .setTranslation(0, -pinHeight * 0.2, 0);
+        world.createCollider(bottomCapsuleDesc, pinBody);
+
+        // Top capsule
+        const topCapsuleDesc = RAPIER.ColliderDesc.capsule(pinHeight * 0.25, pinRadius * 0.8)
+            .setTranslation(0, pinHeight * 0.25, 0);
+        world.createCollider(topCapsuleDesc, pinBody);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
