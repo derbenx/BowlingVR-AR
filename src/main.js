@@ -113,19 +113,28 @@ scene.add(directionalLight);
     }
 
     // User Interaction
+
+    // Left-click to throw
     window.addEventListener('click', () => {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            // Only throw if the ball is reasonably still at the start
+            const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
+            if (isIdle) {
+                 ball.body.applyImpulse({ x: 0, y: 0, z: -8 }, true); // Reduced force
+            }
+        }
+    });
+
+    // Right-click to reset
+    window.addEventListener('contextmenu', (event) => {
+        event.preventDefault(); // Prevent default context menu
         // Reset all dynamic objects
         dynamicObjects.forEach(obj => {
             obj.body.setTranslation(obj.initialPosition, true);
             obj.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
             obj.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         });
-
-        // Find the ball and apply impulse
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball) {
-            ball.body.applyImpulse({ x: 0, y: 0, z: -20 }, true);
-        }
     });
 
 // 7. Handle Window Resizing
