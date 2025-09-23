@@ -14,11 +14,6 @@ scene.background = new THREE.Color(0xaaaaaa); // Use a light gray background
     const gravity = { x: 0.0, y: -9.81, z: 0.0 };
     const world = new RAPIER.World(gravity);
 
-    // Physics Ground
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(10, 0.1, 10);
-    world.createCollider(groundColliderDesc);
-
-
     // 2. Camera
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 2, 5); // Move camera up and back
@@ -51,12 +46,16 @@ scene.add(directionalLight);
     reticle.visible = false;
     scene.add(reticle);
 
-    // Visual ground
-    const groundSize = { width: 20, height: 0.2, depth: 20 };
-    const groundGeometry = new THREE.BoxGeometry(groundSize.width, groundSize.height, groundSize.depth);
-    const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
-    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-    groundMesh.position.y = -0.1; // Match the physics ground
+    // Load Lane Model
+    const laneGltf = await loader.loadAsync('3d/lane.glb');
+    const laneMesh = laneGltf.scene;
+
+    // Visual ground and Physics Ground
+    const groundMesh = laneMesh;
+    const laneBox = new THREE.Box3().setFromObject(groundMesh);
+    const laneSize = laneBox.getSize(new THREE.Vector3());
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(laneSize.x / 2, laneSize.y / 2, laneSize.z / 2);
+    world.createCollider(groundColliderDesc);
     scene.add(groundMesh);
     groundMesh.visible = false;
 
@@ -109,7 +108,7 @@ scene.add(directionalLight);
                 RAPIER.ColliderDesc.capsule(pinHeight * 0.25, pinRadius * 0.8)
             ]
         ];
-        const pinColliderDesc = RAPIER.ColliderDesc.compound(shapes);
+        const pinColliderDesc = RAPIER.ColliderBuilder.compound(shapes);
         world.createCollider(pinColliderDesc, pinBody);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
