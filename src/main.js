@@ -121,7 +121,7 @@ scene.add(directionalLight);
             // Only throw if the ball is reasonably still at the start
             const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
             if (isIdle) {
-                 ball.body.applyImpulse({ x: 0, y: 0, z: -8 }, true); // Reduced force
+                 ball.body.applyImpulse({ x: 0, y: 0, z: -0.4 }, true); // Tuned force based on user feedback
             }
         }
     });
@@ -132,6 +132,7 @@ scene.add(directionalLight);
         // Reset all dynamic objects
         dynamicObjects.forEach(obj => {
             obj.body.setTranslation(obj.initialPosition, true);
+            obj.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true); // Reset rotation to stand upright
             obj.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
             obj.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         });
