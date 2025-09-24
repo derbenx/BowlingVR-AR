@@ -12,6 +12,8 @@ async function main() {
     const world = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 2, 5);
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -27,16 +29,17 @@ async function main() {
 
     const loader = new GLTFLoader();
     let dynamicObjects = [];
-    let isScenePlaced = false;
+    let groundBody;
 
     async function createScene(basePosition) {
         const laneGltf = await loader.loadAsync('3d/lane.glb');
         const groundMesh = laneGltf.scene;
         scene.add(groundMesh);
         groundMesh.position.copy(basePosition);
+        groundMesh.userData.isLane = true;
 
         const groundBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(basePosition.x, basePosition.y, basePosition.z);
-        const groundBody = world.createRigidBody(groundBodyDesc);
+        groundBody = world.createRigidBody(groundBodyDesc);
 
         groundMesh.traverse(child => {
             if (child.isMesh) {
@@ -76,16 +79,18 @@ async function main() {
             }
         });
 
-        function createPin(x, z) {
+        const createPin = (x, z) => {
             const pinMesh = pinModel.clone();
             const initialPosition = new THREE.Vector3(x, 0, z).add(basePosition);
+            pinMesh.position.copy(initialPosition);
+
             const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
             const pinBody = world.createRigidBody(pinBodyDesc);
             const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
             world.createCollider(colliderDesc, pinBody);
-            dynamicObjects.push({ mesh: pinMesh, body: pinBody });
+            dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
             scene.add(pinMesh);
-        }
+        };
 
         const pinSpacing = 0.2;
         const pinStartZ = -3.5;
@@ -98,32 +103,56 @@ async function main() {
         }
     }
 
-    renderer.xr.addEventListener('sessionstart', async () => {
-        if (isScenePlaced) return;
+    await createScene(new THREE.Vector3(0, 0, 0));
 
-        let fY = 0;
-        for (const planeMesh of planes.children) {
-            if (planeMesh.userData.xrPlane.semanticLabel === 'floor') {
-                fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-            }
-        }
+    const planes = new XRPlanes(renderer);
+    planes.visible = false;
+    // scene.add(planes); // No need to add to the scene if not visible
 
-        const xrCamera = renderer.xr.getCamera();
-        const cameraPosition = new THREE.Vector3();
-        xrCamera.getWorldPosition(cameraPosition);
+    let arModeActive = false;
+    let scenePlacedInAR = false;
 
-        const forward = new THREE.Vector3(0, 0, -1);
-        forward.applyQuaternion(xrCamera.quaternion);
-
-        const targetPosition = new THREE.Vector3();
-        targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
-        targetPosition.y = fY;
-
-        await createScene(targetPosition);
-        isScenePlaced = true;
+    renderer.xr.addEventListener('sessionstart', () => {
+        arModeActive = true;
     });
 
     renderer.setAnimationLoop(() => {
+        if (arModeActive && !scenePlacedInAR) {
+            let fY = 1000; // Initialize with a large value
+            let floorPlaneFound = false;
+            for (const planeMesh of planes.children) {
+                if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
+                    fY = Math.min(fY, planeMesh.position.y);
+                    floorPlaneFound = true;
+                }
+            }
+
+            if (floorPlaneFound) {
+                const xrCamera = renderer.xr.getCamera();
+                const cameraPosition = new THREE.Vector3();
+                xrCamera.getWorldPosition(cameraPosition);
+
+                const forward = new THREE.Vector3(0, 0, -1);
+                forward.applyQuaternion(xrCamera.quaternion);
+
+                const targetPosition = new THREE.Vector3();
+                targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
+                targetPosition.y = fY;
+
+                const offset = new THREE.Vector3().copy(targetPosition);
+
+                groundBody.setTranslation(offset, true);
+                const groundMesh = scene.getObjectByProperty('isLane', true);
+                if (groundMesh) groundMesh.position.copy(offset);
+
+                dynamicObjects.forEach(obj => {
+                    const newPos = new THREE.Vector3().copy(obj.initialPosition).add(offset);
+                    obj.body.setTranslation(newPos, true);
+                });
+                scenePlacedInAR = true;
+            }
+        }
+
         world.step();
         dynamicObjects.forEach(obj => {
             obj.mesh.position.copy(obj.body.translation());
@@ -131,21 +160,6 @@ async function main() {
         });
         renderer.render(scene, camera);
     });
-
-    function onSelect() {
-        // Ball spawning logic will be added here later
-    }
-
-    const controller1 = renderer.xr.getController(0);
-    controller1.addEventListener('select', onSelect);
-    scene.add(controller1);
-
-    const controller2 = renderer.xr.getController(1);
-    controller2.addEventListener('select', onSelect);
-    scene.add(controller2);
-
-    const planes = new XRPlanes(renderer);
-    scene.add(planes);
 
     document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 }
