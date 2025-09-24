@@ -5,8 +5,8 @@ import RAPIER from '@dimforge/rapier3d-compat';
 
 let camera, scene, renderer;
 let controller;
-const planes = new Map();
 let assetsLoaded = false;
+let lowestPlaneY = null;
 
 let world, groundCollider;
 const rigidBodies = [];
@@ -30,7 +30,7 @@ async function init() {
     renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
-    document.body.appendChild(ARButton.createButton(renderer, { optionalFeatures: ['local-floor', 'bounded-floor'] }));
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 
     // Physics
     await RAPIER.init();
@@ -42,16 +42,11 @@ async function init() {
 
     window.addEventListener('resize', onWindowResize);
 
-    renderer.xr.addEventListener('sessionstart', async () => {
-        if (assetsLoaded) return;
-        await loadAssets();
-        assetsLoaded = true;
-    });
-
     animate();
 }
 
-async function loadAssets() {
+async function loadAssets(floorY) {
+    assetsLoaded = true;
     const loader = new GLTFLoader();
     const [laneGltf, pinGltf, ballGltf] = await Promise.all([
         loader.loadAsync('3d/lane.glb'),
@@ -59,9 +54,9 @@ async function loadAssets() {
         loader.loadAsync('3d/ball.glb')
     ]);
 
-    // Setup Lane at the origin
+    // Setup Lane on the detected floor
     const lane = laneGltf.scene;
-    lane.position.set(0, 0, -5); // Place it a bit in front of the user
+    lane.position.set(0, floorY, -5); // Place it on the floor, 5m in front
     scene.add(lane);
 
     const laneMesh = lane.children[0];
@@ -70,7 +65,6 @@ async function loadAssets() {
         let indices;
 
         if (!laneMesh.geometry.index) {
-            // If the geometry is non-indexed, create a simple index array
             indices = new Uint32Array(vertices.length / 3);
             for (let i = 0; i < indices.length; i++) {
                 indices[i] = i;
@@ -144,9 +138,33 @@ function animate() {
     renderer.setAnimationLoop(render);
 }
 
-function render() {
+function render(timestamp, frame) {
+    if (frame && !assetsLoaded) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (session.detectedPlanes) {
+            let foundFloor = false;
+            session.detectedPlanes.forEach(plane => {
+                if (plane.orientation === 'horizontal') {
+                    const pose = frame.getPose(plane.planeSpace, referenceSpace);
+                    if (pose) {
+                        if (lowestPlaneY === null || pose.transform.position.y < lowestPlaneY) {
+                            lowestPlaneY = pose.transform.position.y;
+                        }
+                        foundFloor = true;
+                    }
+                }
+            });
+
+            if (foundFloor) {
+                loadAssets(lowestPlaneY);
+            }
+        }
+    }
+
     // Step the physics world
-    world.step();
+    if (world) world.step();
 
     // Update the positions of the rigid bodies
     for(const obj of rigidBodies){
