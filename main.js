@@ -6,6 +6,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 let camera, scene, renderer;
 let controller;
 const planes = new Map();
+let assetsLoaded = false;
 
 let world, groundCollider;
 const rigidBodies = [];
