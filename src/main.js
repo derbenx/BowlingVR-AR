@@ -62,7 +62,7 @@ scene.add(directionalLight);
     let dynamicObjects = [];
 
     // Create Bowling Ball
-    const ballGltf = await loader.loadAsync('3d/bowling_ball.glb');
+    const ballGltf = await loader.loadAsync('3d/ball.glb');
     const ballMesh = ballGltf.scene;
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
     const ballSize = ballBox.getSize(new THREE.Vector3());
@@ -79,7 +79,7 @@ scene.add(directionalLight);
     ballMesh.visible = false;
 
     // Create Bowling Pins
-    const pinGltf = await loader.loadAsync('3d/bowling_pin.glb');
+    const pinGltf = await loader.loadAsync('3d/pin.glb');
     const pinModel = pinGltf.scene;
     const pinBox = new THREE.Box3().setFromObject(pinModel);
     const pinSize = pinBox.getSize(new THREE.Vector3());
