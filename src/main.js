@@ -128,6 +128,17 @@ scene.add(directionalLight);
         }
     }
 
+    // --- Add Measurement Objects ---
+    const measurementBall = ballGltf.scene.clone();
+    measurementBall.scale.setScalar(globalScale);
+    measurementBall.position.set(0.5, 0, 0);
+    scene.add(measurementBall);
+
+    const measurementPin = pinGltf.scene.clone();
+    measurementPin.scale.setScalar(globalScale);
+    measurementPin.position.set(-0.5, 0, 0);
+    scene.add(measurementPin);
+
 
     let placementMatrix = new THREE.Matrix4();
 
