@@ -100,8 +100,9 @@ scene.add(directionalLight);
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
-        // The capsule is now centered on the rigid body, so its local translation is 0.
-        const capsule = RAPIER.ColliderDesc.capsule(capsuleHeight / 2, pinRadius);
+        // The capsule is now centered on the rigid body, so we lift it by half its height to align with the model's base.
+        const capsule = RAPIER.ColliderDesc.capsule(capsuleHeight / 2, pinRadius)
+            .setTranslation(0, capsuleHeight / 2, 0);
         world.createCollider(capsule, pinBody);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
