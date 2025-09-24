@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 
 class DebugMeshManager {
     constructor(scene, world) {
@@ -49,11 +50,11 @@ class DebugMeshManager {
             case RAPIER.ShapeType.ConvexPolyhedron: {
                 const convex = shape;
                 const vertices = convex.vertices;
-                const indices = convex.indices;
-                geometry = new THREE.BufferGeometry();
-                geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-                geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-                geometry.computeVertexNormals();
+                const points = [];
+                for (let i = 0; i < vertices.length; i += 3) {
+                    points.push(new THREE.Vector3(vertices[i], vertices[i+1], vertices[i+2]));
+                }
+                geometry = new ConvexGeometry(points);
                 break;
             }
             default:
