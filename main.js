@@ -29,7 +29,7 @@ async function init() {
     renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
+    document.body.appendChild(ARButton.createButton(renderer, { optionalFeatures: ['local-floor', 'bounded-floor'] }));
 
     // Physics
     await RAPIER.init();
@@ -37,116 +37,91 @@ async function init() {
     world = new RAPIER.World(gravity);
 
     controller = renderer.xr.getController(0);
-    controller.addEventListener('select', onSelect);
     scene.add(controller);
 
     window.addEventListener('resize', onWindowResize);
 
+    renderer.xr.addEventListener('sessionstart', async () => {
+        if (!assetsLoaded) {
+            await loadAssets();
+            assetsLoaded = true;
+        }
+    });
+
     animate();
 }
 
-let assetsLoaded = false;
-const raycaster = new THREE.Raycaster();
+async function loadAssets() {
+    const loader = new GLTFLoader();
+    const [laneGltf, pinGltf, ballGltf] = await Promise.all([
+        loader.loadAsync('3d/lane.glb'),
+        loader.loadAsync('3d/pin.glb'),
+        loader.loadAsync('3d/ball.glb')
+    ]);
 
-function onSelect(event) {
-    if (assetsLoaded) return;
+    // Setup Lane at the origin
+    const lane = laneGltf.scene;
+    lane.position.set(0, 0, -5); // Place it a bit in front of the user
+    scene.add(lane);
 
-    const controller = event.target;
-    const from = new THREE.Vector3(0,0,0);
-    const direction = new THREE.Vector3(0,0,-1);
-
-    from.applyMatrix4(controller.matrixWorld);
-    direction.transformDirection(controller.matrixWorld);
-
-    raycaster.set(from, direction);
-
-    const intersects = raycaster.intersectObjects(Array.from(planes.values()));
-
-    if (intersects.length > 0) {
-        const intersection = intersects[0];
-        const position = intersection.point;
-
-        const loader = new GLTFLoader();
-        Promise.all([
-            loader.loadAsync('3d/lane.glb'),
-            loader.loadAsync('3d/pin.glb'),
-            loader.loadAsync('3d/ball.glb')
-        ]).then(([laneGltf, pinGltf, ballGltf]) => {
-            // Setup Lane
-            const lane = laneGltf.scene;
-            lane.position.copy(position);
-            scene.add(lane);
-
-            if (lane.children[0].geometry.index) {
-                const laneShape = RAPIER.ColliderDesc.trimesh(
-                    lane.children[0].geometry.attributes.position.array,
-                    lane.children[0].geometry.attributes.index.array
-                );
-                const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(lane.position.x, lane.position.y, lane.position.z);
-                const laneBody = world.createRigidBody(laneBodyDesc);
-                world.createCollider(laneShape, laneBody);
-            } else {
-                console.error("Lane model has no indexed geometry. Cannot create trimesh collider.");
-            }
-
-            // Setup Pins
-            const pinPositions = [
-                // Front pin
-                { x: 0, z: -5 },
-                // Second row
-                { x: -0.3, z: -5.5 }, { x: 0.3, z: -5.5 },
-                // Third row
-                { x: -0.6, z: -6 }, { x: 0, z: -6 }, { x: 0.6, z: -6 },
-                // Fourth row
-                { x: -0.9, z: -6.5 }, { x: -0.3, z: -6.5 }, { x: 0.3, z: -6.5 }, { x: 0.9, z: -6.5 }
-            ];
-
-            for (let i = 0; i < 10; i++) {
-                const pin = pinGltf.scene.clone();
-                const pinPos = new THREE.Vector3(pinPositions[i].x, 0.2, pinPositions[i].z);
-                pinPos.add(lane.position); // Position relative to lane
-                pin.position.copy(pinPos);
-                scene.add(pin);
-
-                const pinShape = RAPIER.ColliderDesc.convexHull(pin.children[0].geometry.attributes.position.array);
-                const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pin.position.x, pin.position.y, pin.position.z);
-                const pinBody = world.createRigidBody(pinBodyDesc);
-                world.createCollider(pinShape, pinBody);
-                rigidBodies.push({ mesh: pin, body: pinBody });
-            }
-
-            // Setup Ball
-            const ball = ballGltf.scene;
-            const ballPos = new THREE.Vector3(0, 0.2, 2);
-            ballPos.add(lane.position);
-            ball.position.copy(ballPos);
-            scene.add(ball);
-
-            const ballShape = RAPIER.ColliderDesc.ball(0.1);
-            const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ball.position.x, ball.position.y, ball.position.z);
-            const ballBody = world.createRigidBody(ballBodyDesc);
-            world.createCollider(ballShape, ballBody);
-            rigidBodies.push({ mesh: ball, body: ballBody });
-
-            controller.addEventListener('selectstart', () => {
-                controller.userData.startPosition = controller.position.clone();
-            });
-
-            controller.addEventListener('selectend', () => {
-                const startPosition = controller.userData.startPosition;
-                const endPosition = controller.position;
-                const velocity = new THREE.Vector3().subVectors(endPosition, startPosition).multiplyScalar(-5);
-                ballBody.applyImpulse({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
-            });
-            assetsLoaded = true;
-            // Hide planes after placing the lane
-            for (const plane of planes.values()) {
-                plane.visible = false;
-            }
-        });
+    if (lane.children[0].geometry.index) {
+        const laneShape = RAPIER.ColliderDesc.trimesh(
+            lane.children[0].geometry.attributes.position.array,
+            lane.children[0].geometry.attributes.index.array
+        );
+        const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(lane.position.x, lane.position.y, lane.position.z);
+        const laneBody = world.createRigidBody(laneBodyDesc);
+        world.createCollider(laneShape, laneBody);
+    } else {
+        console.error("Lane model has no indexed geometry. Cannot create trimesh collider.");
     }
-}
 
+    // Setup Pins
+    const pinPositions = [
+        { x: 0, z: -5 },
+        { x: -0.3, z: -5.5 }, { x: 0.3, z: -5.5 },
+        { x: -0.6, z: -6 }, { x: 0, z: -6 }, { x: 0.6, z: -6 },
+        { x: -0.9, z: -6.5 }, { x: -0.3, z: -6.5 }, { x: 0.3, z: -6.5 }, { x: 0.9, z: -6.5 }
+    ];
+
+    for (let i = 0; i < 10; i++) {
+        const pin = pinGltf.scene.clone();
+        const pinPos = new THREE.Vector3(pinPositions[i].x, 0.2, pinPositions[i].z);
+        pinPos.add(lane.position);
+        pin.position.copy(pinPos);
+        scene.add(pin);
+
+        const pinShape = RAPIER.ColliderDesc.convexHull(pin.children[0].geometry.attributes.position.array);
+        const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pin.position.x, pin.position.y, pin.position.z);
+        const pinBody = world.createRigidBody(pinBodyDesc);
+        world.createCollider(pinShape, pinBody);
+        rigidBodies.push({ mesh: pin, body: pinBody });
+    }
+
+    // Setup Ball
+    const ball = ballGltf.scene;
+    const ballPos = new THREE.Vector3(0, 0.2, 2);
+    ballPos.add(lane.position);
+    ball.position.copy(ballPos);
+    scene.add(ball);
+
+    const ballShape = RAPIER.ColliderDesc.ball(0.1);
+    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ball.position.x, ball.position.y, ball.position.z);
+    const ballBody = world.createRigidBody(ballBodyDesc);
+    world.createCollider(ballShape, ballBody);
+    rigidBodies.push({ mesh: ball, body: ballBody });
+
+    controller.addEventListener('selectstart', () => {
+        controller.userData.startPosition = controller.position.clone();
+    });
+
+    controller.addEventListener('selectend', () => {
+        const startPosition = controller.userData.startPosition;
+        const endPosition = controller.position;
+        const velocity = new THREE.Vector3().subVectors(endPosition, startPosition).multiplyScalar(-5);
+        ballBody.applyImpulse({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
+    });
+}
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -158,29 +133,7 @@ function animate() {
     renderer.setAnimationLoop(render);
 }
 
-function render(timestamp, frame) {
-    if (frame) {
-        if (!assetsLoaded) {
-            const referenceSpace = renderer.xr.getReferenceSpace();
-            const session = renderer.xr.getSession();
-
-            if (session.detectedPlanes) {
-                session.detectedPlanes.forEach(plane => {
-                    if (!planes.has(plane)) {
-                        const planeMesh = new THREE.Mesh(
-                            new THREE.PlaneGeometry(plane.polygon[0].x * 2, plane.polygon[0].z * 2), // This is an approximation
-                            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
-                        );
-                        const pose = frame.getPose(plane.planeSpace, referenceSpace);
-                        planeMesh.matrix.fromArray(pose.transform.matrix);
-                        planeMesh.matrixAutoUpdate = false;
-                        scene.add(planeMesh);
-                        planes.set(plane, planeMesh);
-                    }
-                });
-            }
-        }
-
+function render() {
     // Step the physics world
     world.step();
 
