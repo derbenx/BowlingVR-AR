@@ -3,6 +3,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+import { XRPlanes } from './XRPlanes.js';
 
 async function main() {
     await RAPIER.init();
@@ -100,23 +101,23 @@ async function main() {
     renderer.xr.addEventListener('sessionstart', async () => {
         if (isScenePlaced) return;
 
-        const xrCamera = renderer.xr.getCamera();
+        let fY = 0;
+        for (const planeMesh of planes.children) {
+            if (planeMesh.userData.xrPlane.semanticLabel === 'floor') {
+                fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+            }
+        }
 
-        // Get camera's position and direction
+        const xrCamera = renderer.xr.getCamera();
         const cameraPosition = new THREE.Vector3();
         xrCamera.getWorldPosition(cameraPosition);
 
-        const cameraDirection = new THREE.Vector3();
-        xrCamera.getWorldDirection(cameraDirection);
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(xrCamera.quaternion);
 
-        // Flatten the direction vector to be parallel to the floor
-        cameraDirection.y = 0;
-        cameraDirection.normalize();
-
-        // Calculate the target position 1 meter in front of the camera, on the floor
         const targetPosition = new THREE.Vector3();
-        targetPosition.copy(cameraPosition).add(cameraDirection.multiplyScalar(1));
-        targetPosition.y = -cameraPosition.y;
+        targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
+        targetPosition.y = fY;
 
         await createScene(targetPosition);
         isScenePlaced = true;
@@ -143,7 +144,10 @@ async function main() {
     controller2.addEventListener('select', onSelect);
     scene.add(controller2);
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor'] }));
+    const planes = new XRPlanes(renderer);
+    scene.add(planes);
+
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 }
 
 main();
