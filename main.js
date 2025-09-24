@@ -1,7 +1,98 @@
+const dbg = 0;
+
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
+
+class DebugMeshManager {
+    constructor(scene, world) {
+        this.scene = scene;
+        this.world = world;
+        this.meshes = new Map();
+        this.material = new THREE.MeshBasicMaterial({
+            color: 0xff0000,
+            transparent: true,
+            opacity: 0.5,
+        });
+    }
+
+    createMeshForCollider(collider, customVertices = null) {
+        const shape = collider.shape;
+        let geometry;
+
+        switch (shape.type) {
+            case RAPIER.ShapeType.Cuboid: {
+                const he = shape.halfExtents;
+                geometry = new THREE.BoxGeometry(he.x * 2, he.y * 2, he.z * 2);
+                break;
+            }
+            case RAPIER.ShapeType.Ball: {
+                geometry = new THREE.SphereGeometry(shape.radius);
+                break;
+            }
+            case RAPIER.ShapeType.Capsule: {
+                // Using a cylinder as a visual proxy for the capsule
+                geometry = new THREE.CylinderGeometry(shape.radius, shape.radius, shape.halfHeight * 2, 16);
+                break;
+            }
+            case RAPIER.ShapeType.TriMesh: {
+                const trimesh = shape;
+                const vertices = trimesh.vertices;
+                const indices = trimesh.indices;
+                geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+                geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                geometry.computeVertexNormals();
+                break;
+            }
+            case RAPIER.ShapeType.ConvexPolyhedron: {
+                const vertices = customVertices || shape.vertices;
+                if (!vertices) return; // Do not create a mesh if vertices are null
+
+                const points = [];
+                for (let i = 0; i < vertices.length; i += 3) {
+                    points.push(new THREE.Vector3(vertices[i], vertices[i + 1], vertices[i + 2]));
+                }
+                geometry = new ConvexGeometry(points);
+                break;
+            }
+            default:
+                console.warn(`Unsupported collider shape type: ${shape.type}`);
+                return;
+        }
+
+        const mesh = new THREE.Mesh(geometry, this.material);
+        this.scene.add(mesh);
+        this.meshes.set(collider.handle, mesh);
+    }
+
+    update() {
+        this.world.forEachCollider(collider => {
+            const mesh = this.meshes.get(collider.handle);
+            if (!mesh) return;
+
+            const parentBody = collider.parent();
+
+            if (parentBody) {
+                const bodyPos = parentBody.translation();
+                const bodyRot = parentBody.rotation();
+                const colliderPos = collider.translation();
+                const colliderRot = collider.rotation();
+
+                const position = new THREE.Vector3().copy(colliderPos).applyQuaternion(bodyRot).add(bodyPos);
+                const quaternion = new THREE.Quaternion().copy(bodyRot).multiply(colliderRot);
+
+                mesh.position.copy(position);
+                mesh.quaternion.copy(quaternion);
+            } else {
+                mesh.position.copy(collider.translation());
+                mesh.quaternion.copy(collider.rotation());
+            }
+        });
+    }
+}
 
 async function main() {
     await RAPIER.init();
@@ -14,6 +105,11 @@ async function main() {
     const gravity = { x: 0.0, y: -.5 , z: 0.0 };
     //const gravity = { x: 0.0, y: -9.81, z: 0.0 };
     const world = new RAPIER.World(gravity);
+
+    let debugMeshManager;
+    if (dbg) {
+        debugMeshManager = new DebugMeshManager(scene, world);
+    }
 
     // 2. Camera
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
@@ -48,10 +144,29 @@ scene.add(directionalLight);
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            const vertices = child.geometry.attributes.position.array.slice(); // Important: slice to create a copy
+            // update matrix world to get the correct transformations
+            child.updateMatrixWorld(true);
+            const originalVertices = child.geometry.attributes.position.array;
+            const transformedVertices = new Float32Array(originalVertices.length);
+            const tempVec = new THREE.Vector3();
+
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                tempVec.set(
+                    originalVertices[i],
+                    originalVertices[i + 1],
+                    originalVertices[i + 2]
+                );
+                // apply the world matrix of the mesh to the vertex
+                tempVec.applyMatrix4(child.matrixWorld);
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i + 1] = tempVec.y;
+                transformedVertices[i + 2] = tempVec.z;
+            }
+
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-            world.createCollider(trimeshDesc);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices);
+            const collider = world.createCollider(trimeshDesc);
+            if (dbg) debugMeshManager.createMeshForCollider(collider);
         }
     });
 
@@ -73,7 +188,8 @@ scene.add(directionalLight);
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
     const ballBody = world.createRigidBody(ballBodyDesc);
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
-    world.createCollider(ballColliderDesc, ballBody);
+    const ballCollider = world.createCollider(ballColliderDesc, ballBody);
+    if(dbg) debugMeshManager.createMeshForCollider(ballCollider);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, initialPosition: ballInitialPosition, isBall: true });
     scene.add(ballMesh);
@@ -83,26 +199,38 @@ scene.add(directionalLight);
     const pinGltf = await loader.loadAsync('3d/pin.glb');
     const pinModel = pinGltf.scene;
     
-    const pinBox = new THREE.Box3().setFromObject(pinModel);
-    const pinSize = pinBox.getSize(new THREE.Vector3());
-    const pinHeight = pinSize.y;
-    const pinRadius = Math.max(pinSize.x, pinSize.z) / 2;
+    // Extract transformed vertices from the pin model for the convex hull
+    let pinVertices;
+    pinModel.traverse(child => {
+        if (child.isMesh) {
+            child.updateMatrixWorld(true);
+            const originalVertices = child.geometry.attributes.position.array;
+            const transformedVertices = new Float32Array(originalVertices.length);
+            const tempVec = new THREE.Vector3();
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                tempVec.applyMatrix4(child.matrixWorld);
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i+1] = tempVec.y;
+                transformedVertices[i+2] = tempVec.z;
+            }
+            pinVertices = transformedVertices;
+        }
+    });
 
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
 
-        const capsuleHeight = pinHeight * 0.8; // Use 80% of model height for the physics capsule
-        const colliderCenterY = (capsuleHeight / 2) + (pinHeight * 0.1); // Center the capsule and lift it slightly
-
         // The initial position for both the mesh and the body is the center of the physics shape.
-        const initialPosition = { x: x, y: 4, z: z };
+        const initialPosition = { x: x, y: 0, z: z };
 
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
-        // The capsule is now centered on the rigid body, so its local translation is 0.
-        const capsule = RAPIER.ColliderDesc.capsule(capsuleHeight / 2, pinRadius);
-        world.createCollider(capsule, pinBody);
+        // Create a convex hull collider from the pin's geometry
+        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
+        const collider = world.createCollider(colliderDesc, pinBody);
+        if (dbg) debugMeshManager.createMeshForCollider(collider, pinVertices);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
@@ -130,6 +258,8 @@ scene.add(directionalLight);
     function animate(timestamp, frame) {
         // Step the physics world first
         world.step();
+
+        if (dbg) debugMeshManager.update();
 
         // Update all dynamic objects
         dynamicObjects.forEach(obj => {
