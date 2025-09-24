@@ -12,34 +12,38 @@ async function main() {
     const world = new RAPIER.World({ x: 0.0, y: -9.81, z: 0.0 });
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 2, 5);
-    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    const ambientLight = new THREE.AmbientLight(0x404040, 2);
+    const ambientLight = new THREE.AmbientLight(0x404040, 3);
     scene.add(ambientLight);
 
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 2);
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
-    const loader = new GLTFLoader();
+    const planes = new XRPlanes(renderer);
+    planes.visible = false;
+    scene.add(planes);
+
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
+
     let dynamicObjects = [];
-    let groundBody;
+    let scenePlaced = false;
 
     async function createScene(basePosition) {
+        const loader = new GLTFLoader();
+
         const laneGltf = await loader.loadAsync('3d/lane.glb');
         const groundMesh = laneGltf.scene;
-        scene.add(groundMesh);
         groundMesh.position.copy(basePosition);
-        groundMesh.userData.isLane = true;
+        scene.add(groundMesh);
 
         const groundBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(basePosition.x, basePosition.y, basePosition.z);
-        groundBody = world.createRigidBody(groundBodyDesc);
+        const groundBody = world.createRigidBody(groundBodyDesc);
 
         groundMesh.traverse(child => {
             if (child.isMesh) {
@@ -88,7 +92,7 @@ async function main() {
             const pinBody = world.createRigidBody(pinBodyDesc);
             const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
             world.createCollider(colliderDesc, pinBody);
-            dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
+            dynamicObjects.push({ mesh: pinMesh, body: pinBody });
             scene.add(pinMesh);
         };
 
@@ -103,22 +107,9 @@ async function main() {
         }
     }
 
-    await createScene(new THREE.Vector3(0, 0, 0));
-
-    const planes = new XRPlanes(renderer);
-    planes.visible = false;
-    // scene.add(planes); // No need to add to the scene if not visible
-
-    let arModeActive = false;
-    let scenePlacedInAR = false;
-
-    renderer.xr.addEventListener('sessionstart', () => {
-        arModeActive = true;
-    });
-
     renderer.setAnimationLoop(() => {
-        if (arModeActive && !scenePlacedInAR) {
-            let fY = 1000; // Initialize with a large value
+        if (renderer.xr.isPresenting && !scenePlaced) {
+            let fY = 1000;
             let floorPlaneFound = false;
             for (const planeMesh of planes.children) {
                 if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
@@ -139,17 +130,8 @@ async function main() {
                 targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
                 targetPosition.y = fY;
 
-                const offset = new THREE.Vector3().copy(targetPosition);
-
-                groundBody.setTranslation(offset, true);
-                const groundMesh = scene.getObjectByProperty('isLane', true);
-                if (groundMesh) groundMesh.position.copy(offset);
-
-                dynamicObjects.forEach(obj => {
-                    const newPos = new THREE.Vector3().copy(obj.initialPosition).add(offset);
-                    obj.body.setTranslation(newPos, true);
-                });
-                scenePlacedInAR = true;
+                createScene(targetPosition);
+                scenePlaced = true;
             }
         }
 
@@ -158,10 +140,9 @@ async function main() {
             obj.mesh.position.copy(obj.body.translation());
             obj.mesh.quaternion.copy(obj.body.rotation());
         });
+
         renderer.render(scene, camera);
     });
-
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 }
 
 main();
