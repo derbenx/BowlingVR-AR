@@ -101,11 +101,22 @@ async function main() {
         if (isScenePlaced) return;
 
         const xrCamera = renderer.xr.getCamera();
-        const controller = renderer.xr.getController(0);
 
-        const targetPosition = new THREE.Vector3(0, 0, -1);
-        targetPosition.applyMatrix4(controller.matrixWorld);
-        targetPosition.y = 0; // Place directly on the floor
+        // Get camera's position and direction
+        const cameraPosition = new THREE.Vector3();
+        xrCamera.getWorldPosition(cameraPosition);
+
+        const cameraDirection = new THREE.Vector3();
+        xrCamera.getWorldDirection(cameraDirection);
+
+        // Flatten the direction vector to be parallel to the floor
+        cameraDirection.y = 0;
+        cameraDirection.normalize();
+
+        // Calculate the target position 1 meter in front of the camera, on the floor
+        const targetPosition = new THREE.Vector3();
+        targetPosition.copy(cameraPosition).add(cameraDirection.multiplyScalar(1));
+        targetPosition.y = -cameraPosition.y;
 
         await createScene(targetPosition);
         isScenePlaced = true;
