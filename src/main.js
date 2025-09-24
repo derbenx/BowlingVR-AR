@@ -41,6 +41,7 @@ async function main() {
     const laneMesh = laneGltf.scene;
     laneMesh.scale.setScalar(globalScale);
     scene.add(laneMesh);
+    const groundMesh = laneMesh; // Define groundMesh
     groundMesh.traverse(child => {
         if (child.isMesh) {
             const vertices = child.geometry.attributes.position.array.slice();
