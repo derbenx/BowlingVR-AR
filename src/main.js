@@ -48,6 +48,7 @@ scene.add(directionalLight);
     const groundMesh = laneMesh;
 
     // Create a trimesh collider from the lane's geometry
+    let groundBody;
     groundMesh.traverse(child => {
         if (child.isMesh) {
             const vertices = child.geometry.attributes.position.array.slice(); // Important: slice to create a copy
@@ -57,7 +58,8 @@ scene.add(directionalLight);
                 vertices[i] *= globalScale;
             }
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-            world.createCollider(trimeshDesc);
+            groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+            world.createCollider(trimeshDesc, groundBody);
         }
     });
 
@@ -152,7 +154,13 @@ scene.add(directionalLight);
             mesh.quaternion.setFromRotationMatrix(finalMatrix);
         });
 
-        // Also update the static ground mesh
+        // Also update the ground mesh and its kinematic body
+        if (groundBody) {
+            const position = new THREE.Vector3().setFromMatrixPosition(placementMatrix);
+            const quaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
+            groundBody.setNextKinematicTranslation(position);
+            groundBody.setNextKinematicRotation(quaternion);
+        }
         groundMesh.position.setFromMatrixPosition(placementMatrix);
         groundMesh.quaternion.setFromRotationMatrix(placementMatrix);
 
