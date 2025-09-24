@@ -37,14 +37,6 @@ scene.add(directionalLight);
 
     const loader = new GLTFLoader();
 
-    let reticle;
-    reticle = new THREE.Mesh(
-        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial()
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
 
     // Load Lane Model
     const laneGltf = await loader.loadAsync('3d/lane.glb');
@@ -52,10 +44,17 @@ scene.add(directionalLight);
 
     // Visual ground and Physics Ground
     const groundMesh = laneMesh;
-    const laneBox = new THREE.Box3().setFromObject(groundMesh);
-    const laneSize = laneBox.getSize(new THREE.Vector3());
-    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(laneSize.x / 2, laneSize.y / 2, laneSize.z / 2);
-    world.createCollider(groundColliderDesc);
+
+    // Create a trimesh collider from the lane's geometry
+    groundMesh.traverse(child => {
+        if (child.isMesh) {
+            const vertices = child.geometry.attributes.position.array;
+            const indices = child.geometry.index.array;
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+            world.createCollider(trimeshDesc);
+        }
+    });
+
     scene.add(groundMesh);
     groundMesh.visible = false;
 
@@ -77,6 +76,7 @@ scene.add(directionalLight);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, initialPosition: ballInitialPosition, isBall: true });
     scene.add(ballMesh);
+    ballMesh.visible = false;
 
     // Create Bowling Pins
     const pinGltf = await loader.loadAsync('3d/bowling_pin.glb');
@@ -107,6 +107,7 @@ scene.add(directionalLight);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
+        pinMesh.visible = false;
     }
 
     // Layout pins in a triangle
@@ -123,8 +124,6 @@ scene.add(directionalLight);
     }
 
 
-    let hitTestSource = null;
-    let hitTestSourceRequested = false;
     let placementMatrix = new THREE.Matrix4();
     let isScenePlaced = false;
 
@@ -132,31 +131,6 @@ scene.add(directionalLight);
     function animate(timestamp, frame) {
         // Step the physics world first
         world.step();
-
-        if (frame) {
-            const referenceSpace = renderer.xr.getReferenceSpace();
-            const session = renderer.xr.getSession();
-
-            if (hitTestSourceRequested === false) {
-                session.requestReferenceSpace('viewer').then(function (referenceSpace) {
-                    session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
-                        hitTestSource = source;
-                    });
-                });
-                hitTestSourceRequested = true;
-            }
-
-            if (hitTestSource) {
-                const hitTestResults = frame.getHitTestResults(hitTestSource);
-                if (hitTestResults.length && isScenePlaced === false) {
-                    const hit = hitTestResults[0];
-                    reticle.visible = true;
-                    reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-                } else {
-                    reticle.visible = false;
-                }
-            }
-        }
 
         // Update all dynamic objects
         dynamicObjects.forEach(obj => {
@@ -183,6 +157,13 @@ scene.add(directionalLight);
 
     // User Interaction
 
+    renderer.xr.addEventListener('sessionstart', () => {
+        isScenePlaced = true;
+        groundMesh.visible = true;
+        dynamicObjects.forEach(obj => obj.mesh.visible = true);
+        placementMatrix.makeTranslation(0, 0, -2); // Place 2m in front
+    });
+
     // Left-click to throw (Desktop only)
     window.addEventListener('click', () => {
         if (renderer.xr.isPresenting) return;
@@ -199,18 +180,13 @@ scene.add(directionalLight);
     window.addEventListener('contextmenu', (event) => {
         event.preventDefault();
 
+        // Reset physics state of dynamic objects
         dynamicObjects.forEach(obj => {
             obj.body.setTranslation(obj.initialPosition, true);
             obj.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
             obj.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
             obj.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         });
-
-        if (renderer.xr.isPresenting) {
-            isScenePlaced = false;
-            groundMesh.visible = false;
-            placementMatrix.identity();
-        }
     });
 
 // 7. Handle Window Resizing
@@ -223,30 +199,27 @@ scene.add(directionalLight);
     // Start the animation
     renderer.setAnimationLoop(animate);
 
-    const controller = renderer.xr.getController(0);
-    controller.addEventListener('select', () => {
-        if (isScenePlaced === false) {
-            if (reticle.visible) {
-                placementMatrix.fromArray(reticle.matrix.elements);
-                isScenePlaced = true;
-                groundMesh.visible = true;
-                reticle.visible = false;
-            }
-        } else {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball) {
-                const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
-                if (isIdle) {
-                    const placementQuaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
-                    const impulse = new THREE.Vector3(0, 0, -0.4).applyQuaternion(placementQuaternion);
-                    ball.body.applyImpulse(impulse, true);
-                }
+    function onSelect() {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
+            if (isIdle) {
+                const placementQuaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
+                const impulse = new THREE.Vector3(0, 0, -0.4).applyQuaternion(placementQuaternion);
+                ball.body.applyImpulse(impulse, true);
             }
         }
-    });
-    scene.add(controller);
+    }
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+    const controller1 = renderer.xr.getController(0);
+    controller1.addEventListener('select', onSelect);
+    scene.add(controller1);
+
+    const controller2 = renderer.xr.getController(1);
+    controller2.addEventListener('select', onSelect);
+    scene.add(controller2);
+
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor'] }));
 }
 
 main();
