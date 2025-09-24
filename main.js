@@ -142,21 +142,18 @@ scene.add(directionalLight);
     const groundMesh = laneGltf.scene;
 
     // Create a trimesh collider from the lane's geometry
+    const groundBodyDesc = RAPIER.RigidBodyDesc.fixed();
+    const groundBody = world.createRigidBody(groundBodyDesc);
+
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            // update matrix world to get the correct transformations
             child.updateMatrixWorld(true);
             const originalVertices = child.geometry.attributes.position.array;
             const transformedVertices = new Float32Array(originalVertices.length);
             const tempVec = new THREE.Vector3();
 
             for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(
-                    originalVertices[i],
-                    originalVertices[i + 1],
-                    originalVertices[i + 2]
-                );
-                // apply the world matrix of the mesh to the vertex
+                tempVec.set(originalVertices[i], originalVertices[i + 1], originalVertices[i + 2]);
                 tempVec.applyMatrix4(child.matrixWorld);
                 transformedVertices[i] = tempVec.x;
                 transformedVertices[i + 1] = tempVec.y;
@@ -165,7 +162,7 @@ scene.add(directionalLight);
 
             const indices = child.geometry.index.array;
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices);
-            const collider = world.createCollider(trimeshDesc);
+            const collider = world.createCollider(trimeshDesc, groundBody);
             if (dbg) debugMeshManager.createMeshForCollider(collider);
         }
     });
@@ -291,14 +288,22 @@ scene.add(directionalLight);
             obj.mesh.visible = true;
         });
 
-        // Get user's head height and offset the scene to the floor
         const xrCamera = renderer.xr.getCamera();
-        const userHeight = xrCamera.position.y > 0.1 ? xrCamera.position.y : 1.6; // Default to 1.6m if height is 0
+        const controller = renderer.xr.getController(0);
 
-        //placementMatrix.makeTranslation(0, -userHeight, -2); // Place 2m in front, adjusted for user height
-        //Floor doesn't move
-        //groundMesh.position.setFromMatrixPosition(placementMatrix);
-        //groundMesh.quaternion.setFromRotationMatrix(placementMatrix);
+        // Position the scene 2 meters in front of the user
+        const targetPosition = new THREE.Vector3(0, 0, -2);
+        targetPosition.applyMatrix4(controller.matrixWorld);
+
+        groundBody.setTranslation({ x: targetPosition.x, y: targetPosition.y, z: targetPosition.z }, true);
+        groundMesh.position.copy(targetPosition);
+
+        // Update the positions of all dynamic objects relative to the new lane position
+        dynamicObjects.forEach(obj => {
+            const newPos = new THREE.Vector3(obj.initialPosition.x, obj.initialPosition.y, obj.initialPosition.z);
+            newPos.add(targetPosition);
+            obj.body.setTranslation({ x: newPos.x, y: newPos.y, z: newPos.z }, true);
+        });
         
 
     });
