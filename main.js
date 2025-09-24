@@ -1,3 +1,5 @@
+const startAR = 1;
+
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
@@ -164,6 +166,20 @@ async function main() {
     });
 
     document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+
+    if (startAR) {
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-ar').then((supported) => {
+                if (supported) {
+                    navigator.xr.requestSession('immersive-ar', {
+                        requiredFeatures: ['hit-test'],
+                    }).then((session) => {
+                        renderer.xr.setSession(session);
+                    });
+                }
+            });
+        }
+    }
 }
 
 main();
