@@ -31,6 +31,7 @@ async function init() {
     renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
+    // N.B.: The user's code implies plane detection is working, so we request it.
     document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 
     // Physics
@@ -39,20 +40,60 @@ async function init() {
     world = new RAPIER.World(gravity);
 
     controller = renderer.xr.getController(0);
+    controller.addEventListener('select', onSelect);
     scene.add(controller);
 
-    // Setup plane detection
+    // Setup plane detection using the official helper
     planes = new XRPlanes(renderer);
-    planes.visible = false;
-    scene.add(planes);
+    scene.add(planes); // Add to scene to let it update, but we can make it invisible
 
     window.addEventListener('resize', onWindowResize);
 
     animate();
 }
 
-async function loadAssets(floorY) {
+function onSelect() {
+    if (assetsLoaded) return;
     assetsLoaded = true;
+
+    // The first select event places the scene.
+    controller.removeEventListener('select', onSelect);
+
+    // Find the floor using the user's provided logic
+    let floorY = 0; // Default to 0
+    let floorFound = false;
+    for (const planeMesh of planes.children) {
+        // The user discovered the semanticLabel property, which is perfect.
+        if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane._semanticLabel === 'floor') {
+            floorY = planeMesh.position.y;
+            floorFound = true;
+            break; // Found the floor, no need to keep searching
+        }
+    }
+
+    // If no plane is explicitly labeled 'floor', fall back to the lowest horizontal plane.
+    if (!floorFound) {
+        let lowestY = null;
+        for (const planeMesh of planes.children) {
+            if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
+                if (lowestY === null || planeMesh.position.y < lowestY) {
+                    lowestY = planeMesh.position.y;
+                }
+            }
+        }
+        if (lowestY !== null) {
+            floorY = lowestY;
+        }
+    }
+
+    // Now that we have the floor height, load the assets.
+    loadAssets(floorY);
+}
+
+async function loadAssets(floorY) {
+    // Make the planes invisible now that we're done with them for placement
+    planes.visible = false;
+
     const loader = new GLTFLoader();
     const [laneGltf, pinGltf, ballGltf] = await Promise.all([
         loader.loadAsync('3d/lane.glb'),
@@ -62,7 +103,7 @@ async function loadAssets(floorY) {
 
     // Setup Lane on the detected floor
     const lane = laneGltf.scene;
-    lane.position.set(0, floorY, -5); // Place it on the floor, 5m in front
+    lane.position.set(0, floorY, -1); // Use user's Z position
     scene.add(lane);
 
     const laneMesh = lane.children[0];
@@ -122,7 +163,7 @@ async function loadAssets(floorY) {
     world.createCollider(ballShape, ballBody);
     rigidBodies.push({ mesh: ball, body: ballBody });
 
-    // Add throwing listeners
+    // Add throwing listeners for subsequent trigger pulls
     controller.addEventListener('selectstart', () => {
         controller.userData.startPosition = controller.position.clone();
     });
@@ -145,26 +186,7 @@ function animate() {
     renderer.setAnimationLoop(render);
 }
 
-function render(timestamp, frame) {
-    if (frame && !assetsLoaded) {
-        let lowestY = null;
-
-        // planes.children are the meshes created by XRPlanes
-        for (const planeMesh of planes.children) {
-            // Check orientation from the original XRPlane data we attached
-            if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
-                if (lowestY === null || planeMesh.position.y < lowestY) {
-                    lowestY = planeMesh.position.y;
-                }
-            }
-        }
-
-        // If we found at least one horizontal plane, place the scene
-        if (lowestY !== null) {
-            loadAssets(lowestY);
-        }
-    }
-
+function render() {
     // Step the physics world
     if (world) world.step();
 
