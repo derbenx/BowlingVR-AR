@@ -18,7 +18,7 @@ class DebugMeshManager {
         });
     }
 
-    createMeshForCollider(collider) {
+    createMeshForCollider(collider, customVertices = null) {
         const shape = collider.shape;
         let geometry;
 
@@ -48,11 +48,12 @@ class DebugMeshManager {
                 break;
             }
             case RAPIER.ShapeType.ConvexPolyhedron: {
-                const convex = shape;
-                const vertices = convex.vertices;
+                const vertices = customVertices || shape.vertices;
+                if (!vertices) return; // Do not create a mesh if vertices are null
+
                 const points = [];
                 for (let i = 0; i < vertices.length; i += 3) {
-                    points.push(new THREE.Vector3(vertices[i], vertices[i+1], vertices[i+2]));
+                    points.push(new THREE.Vector3(vertices[i], vertices[i + 1], vertices[i + 2]));
                 }
                 geometry = new ConvexGeometry(points);
                 break;
@@ -229,7 +230,7 @@ scene.add(directionalLight);
         // Create a convex hull collider from the pin's geometry
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
         const collider = world.createCollider(colliderDesc, pinBody);
-        if (dbg) debugMeshManager.createMeshForCollider(collider);
+        if (dbg) debugMeshManager.createMeshForCollider(collider, pinVertices);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
