@@ -46,6 +46,16 @@ class DebugMeshManager {
                 geometry.computeVertexNormals();
                 break;
             }
+            case RAPIER.ShapeType.ConvexPolyhedron: {
+                const convex = shape;
+                const vertices = convex.vertices;
+                const indices = convex.indices;
+                geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+                geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                geometry.computeVertexNormals();
+                break;
+            }
             default:
                 console.warn(`Unsupported collider shape type: ${shape.type}`);
                 return;
@@ -187,16 +197,27 @@ scene.add(directionalLight);
     const pinGltf = await loader.loadAsync('3d/pin.glb');
     const pinModel = pinGltf.scene;
     
-    const pinBox = new THREE.Box3().setFromObject(pinModel);
-    const pinSize = pinBox.getSize(new THREE.Vector3());
-    const pinHeight = pinSize.y;
-    const pinRadius = Math.max(pinSize.x, pinSize.z) / 2;
+    // Extract transformed vertices from the pin model for the convex hull
+    let pinVertices;
+    pinModel.traverse(child => {
+        if (child.isMesh) {
+            child.updateMatrixWorld(true);
+            const originalVertices = child.geometry.attributes.position.array;
+            const transformedVertices = new Float32Array(originalVertices.length);
+            const tempVec = new THREE.Vector3();
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                tempVec.applyMatrix4(child.matrixWorld);
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i+1] = tempVec.y;
+                transformedVertices[i+2] = tempVec.z;
+            }
+            pinVertices = transformedVertices;
+        }
+    });
 
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
-
-        const capsuleHeight = pinHeight * 0.8; // Use 80% of model height for the physics capsule
-        const colliderCenterY = (capsuleHeight / 2) + (pinHeight * 0.1); // Center the capsule and lift it slightly
 
         // The initial position for both the mesh and the body is the center of the physics shape.
         const initialPosition = { x: x, y: 4, z: z };
@@ -204,11 +225,10 @@ scene.add(directionalLight);
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
-        // The capsule is now centered on the rigid body, so we lift it by half its height to align with the model's base.
-        const capsule = RAPIER.ColliderDesc.capsule(capsuleHeight / 2, pinRadius)
-            .setTranslation(0, capsuleHeight / 2, 0);
-        const collider = world.createCollider(capsule, pinBody);
-        if(dbg) debugMeshManager.createMeshForCollider(collider);
+        // Create a convex hull collider from the pin's geometry
+        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
+        const collider = world.createCollider(colliderDesc, pinBody);
+        if (dbg) debugMeshManager.createMeshForCollider(collider);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
