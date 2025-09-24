@@ -5,9 +5,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 
 let camera, scene, renderer;
 let controller;
-let reticle;
-let hitTestSource = null;
-let hitTestSourceRequested = false;
+const planes = new Map();
 
 let world, groundCollider;
 const rigidBodies = [];
@@ -31,21 +29,12 @@ async function init() {
     renderer.xr.enabled = true;
     container.appendChild(renderer.domElement);
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
 
     // Physics
     await RAPIER.init();
     const gravity = { x: 0.0, y: -9.81, z: 0.0 };
     world = new RAPIER.World(gravity);
-
-    // Reticle
-    reticle = new THREE.Mesh(
-        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
-        new THREE.MeshBasicMaterial()
-    );
-    reticle.matrixAutoUpdate = false;
-    reticle.visible = false;
-    scene.add(reticle);
 
     controller = renderer.xr.getController(0);
     controller.addEventListener('select', onSelect);
@@ -57,8 +46,26 @@ async function init() {
 }
 
 let assetsLoaded = false;
-function onSelect() {
-    if (reticle.visible && !assetsLoaded) {
+const raycaster = new THREE.Raycaster();
+
+function onSelect(event) {
+    if (assetsLoaded) return;
+
+    const controller = event.target;
+    const from = new THREE.Vector3(0,0,0);
+    const direction = new THREE.Vector3(0,0,-1);
+
+    from.applyMatrix4(controller.matrixWorld);
+    direction.transformDirection(controller.matrixWorld);
+
+    raycaster.set(from, direction);
+
+    const intersects = raycaster.intersectObjects(Array.from(planes.values()));
+
+    if (intersects.length > 0) {
+        const intersection = intersects[0];
+        const position = intersection.point;
+
         const loader = new GLTFLoader();
         Promise.all([
             loader.loadAsync('3d/lane.glb'),
@@ -67,7 +74,7 @@ function onSelect() {
         ]).then(([laneGltf, pinGltf, ballGltf]) => {
             // Setup Lane
             const lane = laneGltf.scene;
-            lane.position.setFromMatrixPosition(reticle.matrix);
+            lane.position.copy(position);
             scene.add(lane);
 
             if (lane.children[0].geometry.index) {
@@ -81,7 +88,6 @@ function onSelect() {
             } else {
                 console.error("Lane model has no indexed geometry. Cannot create trimesh collider.");
             }
-
 
             // Setup Pins
             const pinPositions = [
@@ -133,10 +139,14 @@ function onSelect() {
                 ballBody.applyImpulse({ x: velocity.x, y: velocity.y, z: velocity.z }, true);
             });
             assetsLoaded = true;
-            reticle.visible = false;
+            // Hide planes after placing the lane
+            for (const plane of planes.values()) {
+                plane.visible = false;
+            }
         });
     }
 }
+
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -150,35 +160,26 @@ function animate() {
 
 function render(timestamp, frame) {
     if (frame) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
+        if (!assetsLoaded) {
+            const referenceSpace = renderer.xr.getReferenceSpace();
+            const session = renderer.xr.getSession();
 
-        if (hitTestSourceRequested === false) {
-            session.requestReferenceSpace('viewer').then(function (referenceSpace) {
-                session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
-                    hitTestSource = source;
+            if (session.detectedPlanes) {
+                session.detectedPlanes.forEach(plane => {
+                    if (!planes.has(plane)) {
+                        const planeMesh = new THREE.Mesh(
+                            new THREE.PlaneGeometry(plane.polygon[0].x * 2, plane.polygon[0].z * 2), // This is an approximation
+                            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
+                        );
+                        const pose = frame.getPose(plane.planeSpace, referenceSpace);
+                        planeMesh.matrix.fromArray(pose.transform.matrix);
+                        planeMesh.matrixAutoUpdate = false;
+                        scene.add(planeMesh);
+                        planes.set(plane, planeMesh);
+                    }
                 });
-            });
-
-            session.addEventListener('end', function () {
-                hitTestSourceRequested = false;
-                hitTestSource = null;
-            });
-
-            hitTestSourceRequested = true;
-        }
-
-        if (hitTestSource) {
-            const hitTestResults = frame.getHitTestResults(hitTestSource);
-            if (hitTestResults.length) {
-                const hit = hitTestResults[0];
-                reticle.visible = true;
-                reticle.matrix.fromArray(hit.getPose(referenceSpace).transform.matrix);
-            } else {
-                reticle.visible = false;
             }
         }
-    }
 
     // Step the physics world
     world.step();
