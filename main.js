@@ -2,11 +2,12 @@ import * as THREE from 'three';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { XRPlanes } from './XRPlanes.js';
 
 let camera, scene, renderer;
 let controller;
 let assetsLoaded = false;
-let lowestPlaneY = null;
+let planes; // Will be our XRPlanes helper
 
 let world, groundCollider;
 const rigidBodies = [];
@@ -39,6 +40,11 @@ async function init() {
 
     controller = renderer.xr.getController(0);
     scene.add(controller);
+
+    // Setup plane detection
+    planes = new XRPlanes(renderer);
+    planes.visible = false;
+    scene.add(planes);
 
     window.addEventListener('resize', onWindowResize);
 
@@ -116,6 +122,7 @@ async function loadAssets(floorY) {
     world.createCollider(ballShape, ballBody);
     rigidBodies.push({ mesh: ball, body: ballBody });
 
+    // Add throwing listeners
     controller.addEventListener('selectstart', () => {
         controller.userData.startPosition = controller.position.clone();
     });
@@ -140,26 +147,21 @@ function animate() {
 
 function render(timestamp, frame) {
     if (frame && !assetsLoaded) {
-        const referenceSpace = renderer.xr.getReferenceSpace();
-        const session = renderer.xr.getSession();
+        let lowestY = null;
 
-        if (session.detectedPlanes) {
-            let foundFloor = false;
-            session.detectedPlanes.forEach(plane => {
-                if (plane.orientation === 'horizontal') {
-                    const pose = frame.getPose(plane.planeSpace, referenceSpace);
-                    if (pose) {
-                        if (lowestPlaneY === null || pose.transform.position.y < lowestPlaneY) {
-                            lowestPlaneY = pose.transform.position.y;
-                        }
-                        foundFloor = true;
-                    }
+        // planes.children are the meshes created by XRPlanes
+        for (const planeMesh of planes.children) {
+            // Check orientation from the original XRPlane data we attached
+            if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
+                if (lowestY === null || planeMesh.position.y < lowestY) {
+                    lowestY = planeMesh.position.y;
                 }
-            });
-
-            if (foundFloor) {
-                loadAssets(lowestPlaneY);
             }
+        }
+
+        // If we found at least one horizontal plane, place the scene
+        if (lowestY !== null) {
+            loadAssets(lowestY);
         }
     }
 
