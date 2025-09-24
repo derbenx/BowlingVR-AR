@@ -3,7 +3,6 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
-import { XRPlanes } from './XRPlanes.js';
 
 async function main() {
     await RAPIER.init();
@@ -25,14 +24,34 @@ async function main() {
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
-    const planes = new XRPlanes(renderer);
-    planes.visible = false;
-    scene.add(planes);
+    // Reticle for placing objects
+    const reticle = new THREE.Mesh(
+        new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial()
+    );
+    reticle.matrixAutoUpdate = false;
+    reticle.visible = false;
+    scene.add(reticle);
 
-    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['plane-detection'] }));
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
 
-    let dynamicObjects = [];
+    renderer.xr.addEventListener('sessionstart', async () => {
+        const session = renderer.xr.getSession();
+        const viewerSpace = await session.requestReferenceSpace('viewer');
+        hitTestSourceRequested = true;
+        session.requestHitTestSource({ space: viewerSpace }).then((source) => {
+            hitTestSource = source;
+        });
+    });
+
+    renderer.xr.addEventListener('sessionend', () => {
+        hitTestSourceRequested = false;
+        hitTestSource = null;
+    });
+
     let scenePlaced = false;
+    let dynamicObjects = [];
 
     async function createScene(basePosition) {
         const loader = new GLTFLoader();
@@ -107,31 +126,44 @@ async function main() {
         }
     }
 
-    planes.addEventListener('floor-found', (event) => {
-        const fY = event.data.y;
-        const xrCamera = renderer.xr.getCamera();
-        const cameraPosition = new THREE.Vector3();
-        xrCamera.getWorldPosition(cameraPosition);
+    function onSelect() {
+        if (reticle.visible && !scenePlaced) {
+            const position = new THREE.Vector3();
+            position.setFromMatrixPosition(reticle.matrix);
+            createScene(position);
+            scenePlaced = true;
+            reticle.visible = false;
+        }
+    }
 
-        const forward = new THREE.Vector3(0, 0, -1);
-        forward.applyQuaternion(xrCamera.quaternion);
+    const controller = renderer.xr.getController(0);
+    controller.addEventListener('select', onSelect);
+    scene.add(controller);
 
-        const targetPosition = new THREE.Vector3();
-        targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
-        targetPosition.y = fY;
+    renderer.setAnimationLoop((timestamp, frame) => {
+        if (frame) {
+            if (hitTestSourceRequested && hitTestSource) {
+                const hitTestResults = frame.getHitTestResults(hitTestSource);
+                if (hitTestResults.length) {
+                    const hit = hitTestResults[0];
+                    const pose = hit.getPose(renderer.xr.getReferenceSpace());
+                    reticle.visible = true;
+                    reticle.matrix.fromArray(pose.transform.matrix);
+                } else {
+                    reticle.visible = false;
+                }
+            }
+        }
 
-        createScene(targetPosition);
-    });
-
-    renderer.setAnimationLoop(() => {
         world.step();
         dynamicObjects.forEach(obj => {
             obj.mesh.position.copy(obj.body.translation());
             obj.mesh.quaternion.copy(obj.body.rotation());
         });
-
         renderer.render(scene, camera);
     });
+
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
 }
 
 main();
