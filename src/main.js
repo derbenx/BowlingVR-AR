@@ -130,7 +130,6 @@ scene.add(directionalLight);
 
 
     let placementMatrix = new THREE.Matrix4();
-    let isScenePlaced = false;
 
     // 6. Animation Loop
     function animate(timestamp, frame) {
@@ -163,9 +162,6 @@ scene.add(directionalLight);
     // User Interaction
 
     renderer.xr.addEventListener('sessionstart', () => {
-        if (isScenePlaced) return; // Prevent re-placing if session restarts
-
-        isScenePlaced = true;
         groundMesh.visible = true;
         dynamicObjects.forEach(obj => {
             obj.mesh.visible = true;
@@ -176,19 +172,6 @@ scene.add(directionalLight);
         const userHeight = xrCamera.position.y > 0.1 ? xrCamera.position.y : 1.6; // Default to 1.6m if height is 0
 
         placementMatrix.makeTranslation(0, -userHeight, -2); // Place 2m in front, adjusted for user height
-    });
-
-    // Right-click to reset
-    window.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-
-        // Reset physics state of dynamic objects
-        dynamicObjects.forEach(obj => {
-            obj.body.setTranslation(obj.initialPosition, true);
-            obj.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
-            obj.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-            obj.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-        });
     });
 
 // 7. Handle Window Resizing
