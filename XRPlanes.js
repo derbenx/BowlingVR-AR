@@ -7,12 +7,14 @@ import {
     MeshBasicMaterial,
     Object3D,
     Quaternion,
-    Vector3
+    Vector3,
+    EventDispatcher
 } from 'three';
 
-class XRPlanes extends Object3D {
+class XRPlanes extends EventDispatcher {
     constructor(renderer) {
         super();
+        this.visible = false;
         this.xr = renderer.xr;
         this.planes = new Map();
         this.planeMaterial = new MeshBasicMaterial({
@@ -22,29 +24,22 @@ class XRPlanes extends Object3D {
             opacity: 0.25
         });
 
+        this.floorFound = false;
+
         this.xr.addEventListener('planeschanged', (event) => {
+            if (this.floorFound) return;
+
             const frame = event.frame;
             const detectedPlanes = frame.detectedPlanes;
 
-            const scenePlanes = new Set();
-
             for (const plane of detectedPlanes) {
-                scenePlanes.add(plane);
-
-                if (!this.planes.has(plane)) {
-                    const planeMesh = this.createPlaneMesh(plane);
-                    this.planes.set(plane, planeMesh);
-                    this.add(planeMesh);
-                }
-
-                const planeMesh = this.planes.get(plane);
-                this.updatePlaneMesh(planeMesh, plane);
-            }
-
-            for (const [plane, planeMesh] of this.planes) {
-                if (!scenePlanes.has(plane)) {
-                    this.remove(planeMesh);
-                    this.planes.delete(plane);
+                if (plane.orientation === 'horizontal') {
+                    const pose = frame.getPose(plane.planeSpace, this.xr.getReferenceSpace());
+                    if (pose) {
+                        this.dispatchEvent({ type: 'floor-found', data: { y: pose.transform.position.y } });
+                        this.floorFound = true;
+                        return;
+                    }
                 }
             }
         });

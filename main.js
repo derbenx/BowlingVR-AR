@@ -107,34 +107,23 @@ async function main() {
         }
     }
 
+    planes.addEventListener('floor-found', (event) => {
+        const fY = event.data.y;
+        const xrCamera = renderer.xr.getCamera();
+        const cameraPosition = new THREE.Vector3();
+        xrCamera.getWorldPosition(cameraPosition);
+
+        const forward = new THREE.Vector3(0, 0, -1);
+        forward.applyQuaternion(xrCamera.quaternion);
+
+        const targetPosition = new THREE.Vector3();
+        targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
+        targetPosition.y = fY;
+
+        createScene(targetPosition);
+    });
+
     renderer.setAnimationLoop(() => {
-        if (renderer.xr.isPresenting && !scenePlaced) {
-            let fY = 1000;
-            let floorPlaneFound = false;
-            for (const planeMesh of planes.children) {
-                if (planeMesh.userData.xrPlane && planeMesh.userData.xrPlane.orientation === 'horizontal') {
-                    fY = Math.min(fY, planeMesh.position.y);
-                    floorPlaneFound = true;
-                }
-            }
-
-            if (floorPlaneFound) {
-                const xrCamera = renderer.xr.getCamera();
-                const cameraPosition = new THREE.Vector3();
-                xrCamera.getWorldPosition(cameraPosition);
-
-                const forward = new THREE.Vector3(0, 0, -1);
-                forward.applyQuaternion(xrCamera.quaternion);
-
-                const targetPosition = new THREE.Vector3();
-                targetPosition.copy(cameraPosition).add(forward.multiplyScalar(1));
-                targetPosition.y = fY;
-
-                createScene(targetPosition);
-                scenePlaced = true;
-            }
-        }
-
         world.step();
         dynamicObjects.forEach(obj => {
             obj.mesh.position.copy(obj.body.translation());
