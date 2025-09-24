@@ -11,7 +11,7 @@ class DebugMeshManager {
         this.world = world;
         this.meshes = new Map();
         this.material = new THREE.MeshBasicMaterial({
-            color: 0x00ff00,
+            color: 0xff0000,
             transparent: true,
             opacity: 0.5,
         });
@@ -32,7 +32,8 @@ class DebugMeshManager {
                 break;
             }
             case RAPIER.ShapeType.Capsule: {
-                geometry = new THREE.CapsuleGeometry(shape.radius, shape.halfHeight * 2, 8, 16);
+                // Using a cylinder as a visual proxy for the capsule
+                geometry = new THREE.CylinderGeometry(shape.radius, shape.radius, shape.halfHeight * 2, 16);
                 break;
             }
             case RAPIER.ShapeType.TriMesh: {
@@ -131,9 +132,27 @@ scene.add(directionalLight);
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            const vertices = child.geometry.attributes.position.array.slice(); // Important: slice to create a copy
+            // update matrix world to get the correct transformations
+            child.updateMatrixWorld(true);
+            const originalVertices = child.geometry.attributes.position.array;
+            const transformedVertices = new Float32Array(originalVertices.length);
+            const tempVec = new THREE.Vector3();
+
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                tempVec.set(
+                    originalVertices[i],
+                    originalVertices[i + 1],
+                    originalVertices[i + 2]
+                );
+                // apply the world matrix of the mesh to the vertex
+                tempVec.applyMatrix4(child.matrixWorld);
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i + 1] = tempVec.y;
+                transformedVertices[i + 2] = tempVec.z;
+            }
+
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices);
             const collider = world.createCollider(trimeshDesc);
             if (dbg) debugMeshManager.createMeshForCollider(collider);
         }
