@@ -35,12 +35,14 @@ scene.add(directionalLight);
 
     // 5. Create Game Elements
 
+    const globalScale = 1.0 / 1.9;
     const loader = new GLTFLoader();
 
 
     // Load Lane Model
     const laneGltf = await loader.loadAsync('3d/lane.glb');
     const laneMesh = laneGltf.scene;
+    laneMesh.scale.setScalar(globalScale);
 
     // Visual ground and Physics Ground
     const groundMesh = laneMesh;
@@ -48,8 +50,12 @@ scene.add(directionalLight);
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            const vertices = child.geometry.attributes.position.array;
+            const vertices = child.geometry.attributes.position.array.slice(); // Important: slice to create a copy
             const indices = child.geometry.index.array;
+            // Scale vertices
+            for (let i = 0; i < vertices.length; i++) {
+                vertices[i] *= globalScale;
+            }
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
             world.createCollider(trimeshDesc);
         }
@@ -64,11 +70,12 @@ scene.add(directionalLight);
     // Create Bowling Ball
     const ballGltf = await loader.loadAsync('3d/ball.glb');
     const ballMesh = ballGltf.scene;
+    ballMesh.scale.setScalar(globalScale);
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
 
-    const ballInitialPosition = { x: 0, y: 0.5, z: 8 };
+    const ballInitialPosition = { x: 0, y: 0.5 * globalScale, z: 8 * globalScale };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
     const ballBody = world.createRigidBody(ballBodyDesc);
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
@@ -81,6 +88,7 @@ scene.add(directionalLight);
     // Create Bowling Pins
     const pinGltf = await loader.loadAsync('3d/pin.glb');
     const pinModel = pinGltf.scene;
+    pinModel.scale.setScalar(globalScale);
     const pinBox = new THREE.Box3().setFromObject(pinModel);
     const pinSize = pinBox.getSize(new THREE.Vector3());
     const pinHeight = pinSize.y;
@@ -88,22 +96,19 @@ scene.add(directionalLight);
 
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
-        const initialPosition = { x: x, y: pinHeight / 2, z: z };
+
+        const capsuleHeight = pinHeight * 0.8; // Use 80% of model height for the physics capsule
+        const colliderCenterY = (capsuleHeight / 2) + (pinHeight * 0.1); // Center the capsule and lift it slightly
+
+        // The initial position for both the mesh and the body is the center of the physics shape.
+        const initialPosition = { x: x, y: colliderCenterY, z: z };
 
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
-        // Create multiple colliders and attach them to the same body to form a compound shape.
-
-        // Bottom capsule
-        const bottomCapsuleDesc = RAPIER.ColliderDesc.capsule(pinHeight * 0.3, pinRadius)
-            .setTranslation(0, -pinHeight * 0.2, 0);
-        world.createCollider(bottomCapsuleDesc, pinBody);
-
-        // Top capsule
-        const topCapsuleDesc = RAPIER.ColliderDesc.capsule(pinHeight * 0.25, pinRadius * 0.8)
-            .setTranslation(0, pinHeight * 0.25, 0);
-        world.createCollider(topCapsuleDesc, pinBody);
+        // The capsule is now centered on the rigid body, so its local translation is 0.
+        const capsule = RAPIER.ColliderDesc.capsule(capsuleHeight / 2, pinRadius);
+        world.createCollider(capsule, pinBody);
 
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
@@ -111,8 +116,8 @@ scene.add(directionalLight);
     }
 
     // Layout pins in a triangle
-    const pinSpacing = 0.2;
-    const pinStartZ = -5;
+    const pinSpacing = 0.2 * globalScale;
+    const pinStartZ = -5 * globalScale;
     let pinCount = 0;
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
@@ -158,22 +163,19 @@ scene.add(directionalLight);
     // User Interaction
 
     renderer.xr.addEventListener('sessionstart', () => {
+        if (isScenePlaced) return; // Prevent re-placing if session restarts
+
         isScenePlaced = true;
         groundMesh.visible = true;
-        dynamicObjects.forEach(obj => obj.mesh.visible = true);
-        placementMatrix.makeTranslation(0, 0, -2); // Place 2m in front
-    });
+        dynamicObjects.forEach(obj => {
+            obj.mesh.visible = true;
+        });
 
-    // Left-click to throw (Desktop only)
-    window.addEventListener('click', () => {
-        if (renderer.xr.isPresenting) return;
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball) {
-            const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
-            if (isIdle) {
-                 ball.body.applyImpulse({ x: 0, y: 0, z: -0.4 }, true);
-            }
-        }
+        // Get user's head height and offset the scene to the floor
+        const xrCamera = renderer.xr.getCamera();
+        const userHeight = xrCamera.position.y > 0.1 ? xrCamera.position.y : 1.6; // Default to 1.6m if height is 0
+
+        placementMatrix.makeTranslation(0, -userHeight, -2); // Place 2m in front, adjusted for user height
     });
 
     // Right-click to reset
