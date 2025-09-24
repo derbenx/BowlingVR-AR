@@ -17,12 +17,6 @@ class DebugMeshManager {
         });
     }
 
-    init() {
-        this.world.forEachCollider(collider => {
-            this.createMeshForCollider(collider);
-        });
-    }
-
     createMeshForCollider(collider) {
         const shape = collider.shape;
         let geometry;
@@ -42,8 +36,9 @@ class DebugMeshManager {
                 break;
             }
             case RAPIER.ShapeType.TriMesh: {
-                const vertices = shape.vertices;
-                const indices = shape.indices;
+                const trimesh = shape;
+                const vertices = trimesh.vertices;
+                const indices = trimesh.indices;
                 geometry = new THREE.BufferGeometry();
                 geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
                 geometry.setIndex(new THREE.BufferAttribute(indices, 1));
@@ -98,6 +93,11 @@ async function main() {
     //const gravity = { x: 0.0, y: -9.81, z: 0.0 };
     const world = new RAPIER.World(gravity);
 
+    let debugMeshManager;
+    if (dbg) {
+        debugMeshManager = new DebugMeshManager(scene, world);
+    }
+
     // 2. Camera
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
 camera.position.set(0, 2, 5); // Move camera up and back
@@ -134,7 +134,8 @@ scene.add(directionalLight);
             const vertices = child.geometry.attributes.position.array.slice(); // Important: slice to create a copy
             const indices = child.geometry.index.array;
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-            world.createCollider(trimeshDesc);
+            const collider = world.createCollider(trimeshDesc);
+            if (dbg) debugMeshManager.createMeshForCollider(collider);
         }
     });
 
@@ -211,12 +212,6 @@ scene.add(directionalLight);
 
     let placementMatrix = new THREE.Matrix4();
     let isScenePlaced = false;
-
-    let debugMeshManager;
-    if (dbg) {
-        debugMeshManager = new DebugMeshManager(scene, world);
-        debugMeshManager.init();
-    }
 
     // 6. Animation Loop
     function animate(timestamp, frame) {
