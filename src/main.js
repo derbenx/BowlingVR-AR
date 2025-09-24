@@ -13,22 +13,24 @@ async function main() {
     const world = new RAPIER.World(gravity);
 
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 2, 5);
-    camera.lookAt(0, 0, 0);
+    camera.position.set(0, 1.6, 0);
+    camera.lookAt(0, 0, -5);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    const ambientLight = new THREE.AmbientLight(0x404040, 2);
+    const ambientLight = new THREE.AmbientLight(0x404040, 5);
     scene.add(ambientLight);
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 3);
+    directionalLight.position.set(2, 5, 5);
     scene.add(directionalLight);
 
     const globalScale = 1.0 / 1.9;
     const loader = new GLTFLoader();
+    let dynamicObjects = [];
+    let placementMatrix = new THREE.Matrix4();
 
     // Load all models first
     const [laneGltf, pinGltf, ballGltf] = await Promise.all([
@@ -42,30 +44,18 @@ async function main() {
     laneMesh.scale.setScalar(globalScale);
     scene.add(laneMesh);
     const groundMesh = laneMesh; // Define groundMesh
+    groundMesh.visible = false; // Set initial visibility
+    let groundBody;
     groundMesh.traverse(child => {
         if (child.isMesh) {
             const vertices = child.geometry.attributes.position.array.slice();
             const indices = child.geometry.index.array;
             for (let i = 0; i < vertices.length; i++) { vertices[i] *= globalScale; }
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-            world.createCollider(trimeshDesc);
+            groundBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased());
+            world.createCollider(trimeshDesc, groundBody);
         }
     });
-
-    let dynamicObjects = [];
-
-    // Setup Ball
-    const ballMesh = ballGltf.scene;
-    ballMesh.scale.setScalar(globalScale);
-    const ballBox = new THREE.Box3().setFromObject(ballMesh);
-    const ballRadius = ballBox.getSize(new THREE.Vector3()).x / 2;
-    const ballInitialPosition = { x: 0, y: 0.5 * globalScale, z: 8 * globalScale };
-    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
-    const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
-    world.createCollider(ballColliderDesc, ballBody);
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, initialPosition: ballInitialPosition, isBall: true });
-    scene.add(ballMesh);
 
     // Setup Pins
     const pinModel = pinGltf.scene;
@@ -89,65 +79,70 @@ async function main() {
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         world.createCollider(pinColliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
+
         scene.add(pinMesh);
+        pinMesh.visible = false; // Set initial visibility
+        dynamicObjects.push({ mesh: pinMesh, body: pinBody });
     }
 
     const pinSpacing = 0.2 * globalScale;
-    const pinStartZ = -5 * globalScale;
+    const laneLength = 18.29 * globalScale;
+    const pinStartZ = -(laneLength / 2) + 4; // Moved closer
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
             createPin((i - row / 2) * pinSpacing * 2, pinStartZ - row * pinSpacing * 1.732);
         }
     }
 
-    let placementMatrix = new THREE.Matrix4();
+    // Setup Ball
+    const ballMesh = ballGltf.scene;
+    ballMesh.scale.setScalar(globalScale);
+    const ballBox = new THREE.Box3().setFromObject(ballMesh);
+    const ballRadius = ballBox.getSize(new THREE.Vector3()).x / 2;
+    const ballInitialPosition = { x: 0, y: ballRadius + 0.1, z: (laneLength / 2) - 1 };
+    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
+    const ballBody = world.createRigidBody(ballBodyDesc);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
+    world.createCollider(ballColliderDesc, ballBody);
+    scene.add(ballMesh);
+    ballMesh.visible = false; // Set initial visibility
+    dynamicObjects.push({ mesh: ballMesh, body: ballBody, isBall: true });
 
-    function animate(timestamp, frame) {
+    // Animation Loop
+    function animate() {
+        if (groundBody) {
+            const position = new THREE.Vector3().setFromMatrixPosition(placementMatrix);
+            const quaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
+            groundBody.setNextKinematicTranslation(position);
+            groundBody.setNextKinematicRotation(quaternion);
+        }
         world.step();
         dynamicObjects.forEach(obj => {
             const finalMatrix = new THREE.Matrix4().multiplyMatrices(placementMatrix, new THREE.Matrix4().compose(obj.body.translation(), obj.body.rotation(), {x:1,y:1,z:1}));
             obj.mesh.position.setFromMatrixPosition(finalMatrix);
             obj.mesh.quaternion.setFromRotationMatrix(finalMatrix);
         });
-        laneMesh.position.setFromMatrixPosition(placementMatrix);
-        laneMesh.quaternion.setFromRotationMatrix(placementMatrix);
+        groundMesh.position.setFromMatrixPosition(placementMatrix);
+        groundMesh.quaternion.setFromRotationMatrix(placementMatrix);
         renderer.render(scene, camera);
     }
+    renderer.setAnimationLoop(animate);
 
+    // Session Start
     renderer.xr.addEventListener('sessionstart', () => {
-        scene.traverse(child => { if(child.isMesh) child.visible = true; });
+        groundMesh.visible = true;
+        dynamicObjects.forEach(obj => { obj.mesh.visible = true; });
+
         const xrCamera = renderer.xr.getCamera();
         const userHeight = xrCamera.position.y > 0.1 ? xrCamera.position.y : 1.6;
         placementMatrix.makeTranslation(0, -userHeight, -2);
     });
 
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    renderer.setAnimationLoop(animate);
-
-    function onSelect() {
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball) {
-            const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
-            if (isIdle) {
-                const placementQuaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
-                const impulse = new THREE.Vector3(0, 0, -0.4).applyQuaternion(placementQuaternion);
-                ball.body.applyImpulse(impulse, true);
-            }
-        }
-    }
-
+    // Dummy onSelect for completeness, though it's not used in this version
+    function onSelect() {}
     const controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', onSelect);
     scene.add(controller1);
-    const controller2 = renderer.xr.getController(1);
-    controller2.addEventListener('select', onSelect);
-    scene.add(controller2);
 
     document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor'] }));
 }
