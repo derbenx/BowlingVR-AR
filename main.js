@@ -1,4 +1,4 @@
-const dbg = 1;
+const dbg = 0;
 
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
@@ -222,7 +222,7 @@ scene.add(directionalLight);
         const pinMesh = pinModel.clone();
 
         // The initial position for both the mesh and the body is the center of the physics shape.
-        const initialPosition = { x: x, y: 4, z: z };
+        const initialPosition = { x: x, y: 0, z: z };
 
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
