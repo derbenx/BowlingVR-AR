@@ -43,10 +43,9 @@ async function init() {
     window.addEventListener('resize', onWindowResize);
 
     renderer.xr.addEventListener('sessionstart', async () => {
-        if (!assetsLoaded) {
-            await loadAssets();
-            assetsLoaded = true;
-        }
+        if (assetsLoaded) return;
+        await loadAssets();
+        assetsLoaded = true;
     });
 
     animate();
@@ -65,16 +64,27 @@ async function loadAssets() {
     lane.position.set(0, 0, -5); // Place it a bit in front of the user
     scene.add(lane);
 
-    if (lane.children[0].geometry.index) {
-        const laneShape = RAPIER.ColliderDesc.trimesh(
-            lane.children[0].geometry.attributes.position.array,
-            lane.children[0].geometry.attributes.index.array
-        );
+    const laneMesh = lane.children[0];
+    if (laneMesh && laneMesh.geometry) {
+        const vertices = laneMesh.geometry.attributes.position.array;
+        let indices;
+
+        if (!laneMesh.geometry.index) {
+            // If the geometry is non-indexed, create a simple index array
+            indices = new Uint32Array(vertices.length / 3);
+            for (let i = 0; i < indices.length; i++) {
+                indices[i] = i;
+            }
+        } else {
+            indices = laneMesh.geometry.index.array;
+        }
+
+        const laneShape = RAPIER.ColliderDesc.trimesh(vertices, indices);
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(lane.position.x, lane.position.y, lane.position.z);
         const laneBody = world.createRigidBody(laneBodyDesc);
         world.createCollider(laneShape, laneBody);
     } else {
-        console.error("Lane model has no indexed geometry. Cannot create trimesh collider.");
+        console.error("Lane model does not contain a valid mesh.");
     }
 
     // Setup Pins
