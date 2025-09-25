@@ -124,10 +124,19 @@ function animate(timestamp, frame) {
         if (pins.length > 0) {
             let fallenPins = 0;
             for (const pin of pins) {
+                // Check orientation
                 const up = new THREE.Vector3(0, 1, 0);
                 const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
                 const pinUp = up.clone().applyQuaternion(quaternion);
-                if (pinUp.y < 0.5) { // Threshold for being "fallen"
+                const isTippedOver = pinUp.y < 0.5;
+
+                // Check distance from start
+                const currentPosition = new THREE.Vector3().copy(pin.body.translation());
+                const initialPositionVec = new THREE.Vector3(pin.initialPosition.x, pin.initialPosition.y, pin.initialPosition.z);
+                const distance = currentPosition.distanceTo(initialPositionVec);
+                const isFarAway = distance > 1.0; // 1 meter threshold
+
+                if (isTippedOver || isFarAway) {
                     fallenPins++;
                 }
             }
@@ -149,7 +158,8 @@ function animate(timestamp, frame) {
                 if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                     endSessionButtonState[i] = true; // Mark as pressed
                     if (exitConfirmationActive) {
-                        // Second press: end the session
+                        // Second press: dismiss the UI first, then end the session
+                        dismissExitConfirmation();
                         renderer.xr.getSession().end();
                     } else {
                         // First press: show confirmation
@@ -226,7 +236,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(10).setFriction(.8);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, initialPosition: ballInitialPosition, isBall: true });
+    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
     scene.add(ballMesh);
     ballMesh.visible = true;
 
@@ -389,6 +399,7 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
+                ball.collider.setEnabled(false); // Disable collision while holding
                 ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
                 holdingController = controller;
             }
@@ -400,6 +411,7 @@ async function init() {
         if (holdingController === controller) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
+                ball.collider.setEnabled(true); // Re-enable collision on release
                 ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
                 const impulse = new THREE.Vector3(0, 0, -10).applyQuaternion(controller.quaternion);
                 ball.body.applyImpulse(impulse, true);
