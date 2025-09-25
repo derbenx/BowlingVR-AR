@@ -21,6 +21,9 @@ let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
+let exitConfirmationActive = false;
+let exitConfirmationMesh = null;
+let exitConfirmationTimer = null;
 
 async function main() {
     await RAPIER.init();
@@ -102,6 +105,17 @@ function animate(timestamp, frame) {
 
     renderer.render(scene, camera);
 
+    if (exitConfirmationMesh) {
+        const cameraPosition = new THREE.Vector3();
+        const cameraQuaternion = new THREE.Quaternion();
+        camera.getWorldPosition(cameraPosition);
+        camera.getWorldQuaternion(cameraQuaternion);
+
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2)); // Place 2 units in front
+        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+    }
+
     if (renderer.xr.isPresenting) {
         const pins = dynamicObjects.filter(obj => obj.isPin);
         if (pins.length > 0) {
@@ -127,22 +141,41 @@ function animate(timestamp, frame) {
         for (let i = 0; i < 2; i++) {
             const controller = renderer.xr.getController(i);
             if (controller && controller.gamepad) {
-                // A/X button for reset
-                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
-                    resetButtonState[i] = true;
-                    resetPins();
-                } else if (!controller.gamepad.buttons[4].pressed) {
-                    resetButtonState[i] = false;
-                }
 
-                // B/Y button for ending session
+                // Handle B/Y button (index 5) for exiting
                 if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
-                    endSessionButtonState[i] = true;
-                    if (window.confirm("End AR session?")) {
+                    endSessionButtonState[i] = true; // Mark as pressed
+                    if (exitConfirmationActive) {
+                        // Second press: end the session
                         renderer.xr.getSession().end();
+                    } else {
+                        // First press: show confirmation
+                        exitConfirmationActive = true;
+                        exitConfirmationMesh = createExitConfirmationMesh();
+                        scene.add(exitConfirmationMesh);
+
+                        // Auto-dismiss after 5 seconds
+                        exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
                     }
                 } else if (!controller.gamepad.buttons[5].pressed) {
-                    endSessionButtonState[i] = false;
+                    endSessionButtonState[i] = false; // Mark as released
+                }
+
+                // Handle A/X button (index 4) for resetting pins or dismissing confirmation
+                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
+                    resetButtonState[i] = true; // Mark as pressed
+                    if (exitConfirmationActive) {
+                        dismissExitConfirmation();
+                    } else {
+                        resetPins();
+                    }
+                } else if (!controller.gamepad.buttons[4].pressed) {
+                    resetButtonState[i] = false; // Mark as released
+                }
+
+                // Also dismiss on trigger press (index 0)
+                if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
+                    dismissExitConfirmation();
                 }
             }
         }
@@ -243,6 +276,7 @@ function createPins(fY) {
 }
 
 function resetPins() {
+    dismissExitConfirmation();
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
@@ -261,6 +295,43 @@ function resetPins() {
 
     // Create new pins
     createPins(fY_floor);
+}
+
+function dismissExitConfirmation() {
+    if (exitConfirmationMesh) {
+        scene.remove(exitConfirmationMesh);
+        exitConfirmationMesh = null;
+    }
+    exitConfirmationActive = false;
+    if (exitConfirmationTimer) {
+        clearTimeout(exitConfirmationTimer);
+        exitConfirmationTimer = null;
+    }
+}
+
+function createExitConfirmationMesh() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = 'white';
+    context.font = '30px sans-serif';
+    context.textAlign = 'center';
+    context.fillText('Press B/Y again to exit', canvas.width / 2, canvas.height / 2 - 20);
+    context.fillText('Any other key to close this.', canvas.width / 2, canvas.height / 2 + 20);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const geometry = new THREE.PlaneGeometry(1, 0.5);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    const mesh = new THREE.Mesh(geometry, material);
+
+    return mesh;
 }
 
 async function init() {
