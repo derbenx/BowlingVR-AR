@@ -6,6 +6,7 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { XRPlanes } from './XRPlanes.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
@@ -337,13 +338,25 @@ scene.add(directionalLight);
         }
     }
 
+    const controllerModelFactory = new XRControllerModelFactory();
+
     const controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', onSelect);
     scene.add(controller1);
 
+    const controllerGrip1 = renderer.xr.getControllerGrip(0);
+    const controllerModel1 = controllerModelFactory.createControllerModel(controllerGrip1);
+    controllerGrip1.add(controllerModel1);
+    scene.add(controllerGrip1);
+
     const controller2 = renderer.xr.getController(1);
     controller2.addEventListener('select', onSelect);
     scene.add(controller2);
+
+    const controllerGrip2 = renderer.xr.getControllerGrip(1);
+    const controllerModel2 = controllerModelFactory.createControllerModel(controllerGrip2);
+    controllerGrip2.add(controllerModel2);
+    scene.add(controllerGrip2);
 
 }
 
