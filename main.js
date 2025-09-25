@@ -25,6 +25,7 @@ let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
 let laneObject = null;
+let laneCollisionVisualizer = null;
 
 async function main() {
     await RAPIER.init();
@@ -233,22 +234,39 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const laneBody = world.createRigidBody(laneBodyDesc);
     laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create a trimesh collider from the lane's geometry
+    // Create a trimesh collider that is correctly scaled to the visual model
     groundMesh.traverse(child => {
         if (child.isMesh) {
+            child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
             const originalVertices = child.geometry.attributes.position.array;
-            const scaledVertices = new Float32Array(originalVertices.length);
-            const laneColliderWidthScale = 0.9; // Scale down the width to match visuals
+            const transformedVertices = new Float32Array(originalVertices.length);
+            const tempVec = new THREE.Vector3();
+            const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
             for (let i = 0; i < originalVertices.length; i += 3) {
-                scaledVertices[i] = originalVertices[i] * laneColliderWidthScale; // Scale X
-                scaledVertices[i + 1] = originalVertices[i + 1];                   // Y remains the same
-                scaledVertices[i + 2] = originalVertices[i + 2];                   // Z remains the same
+                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                // 1. Transform vertex to world space using the mesh's world matrix
+                tempVec.applyMatrix4(child.matrixWorld);
+                // 2. Transform vertex from world space to the rigid body's local space
+                tempVec.sub(bodyPosition);
+
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i+1] = tempVec.y;
+                transformedVertices[i+2] = tempVec.z;
             }
 
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(scaledVertices, indices).setRestitution(0.0);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0);
             world.createCollider(trimeshDesc, laneBody);
+
+            // Create and add the visualizer mesh
+            const visualizerGeo = new THREE.BufferGeometry();
+            visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+            visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+            const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+            laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
+            laneCollisionVisualizer.position.copy(bodyPosition); // Position it at the rigid body's location
+            scene.add(laneCollisionVisualizer);
         }
     });
 
@@ -410,6 +428,10 @@ function cleanupScene() {
         scene.remove(laneObject.mesh);
         world.removeRigidBody(laneObject.body);
         laneObject = null;
+    }
+    if (laneCollisionVisualizer) {
+        scene.remove(laneCollisionVisualizer);
+        laneCollisionVisualizer = null;
     }
 
     // Reset state variables
