@@ -16,6 +16,11 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
+let pinModel, pinVertices, fY_floor;
+let resetButtonState = [false, false];
+let endSessionButtonState = [false, false];
+let pinsFallenResetTimer = null;
+let allPinsFallen = false;
 
 async function main() {
     await RAPIER.init();
@@ -42,6 +47,7 @@ async function main() {
                     fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
                 }
                 clearInterval(checkFloor);
+                fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
             }
         }, 150);
@@ -95,6 +101,52 @@ function animate(timestamp, frame) {
 
 
     renderer.render(scene, camera);
+
+    if (renderer.xr.isPresenting) {
+        const pins = dynamicObjects.filter(obj => obj.isPin);
+        if (pins.length > 0) {
+            let fallenPins = 0;
+            for (const pin of pins) {
+                const up = new THREE.Vector3(0, 1, 0);
+                const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+                const pinUp = up.clone().applyQuaternion(quaternion);
+                if (pinUp.y < 0.5) { // Threshold for being "fallen"
+                    fallenPins++;
+                }
+            }
+
+            if (fallenPins === pins.length && !allPinsFallen) {
+                allPinsFallen = true;
+                pinsFallenResetTimer = setTimeout(() => {
+                    resetPins();
+                    pinsFallenResetTimer = null;
+                }, 4000);
+            }
+        }
+
+        for (let i = 0; i < 2; i++) {
+            const controller = renderer.xr.getController(i);
+            if (controller && controller.gamepad) {
+                // A/X button for reset
+                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
+                    resetButtonState[i] = true;
+                    resetPins();
+                } else if (!controller.gamepad.buttons[4].pressed) {
+                    resetButtonState[i] = false;
+                }
+
+                // B/Y button for ending session
+                if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                    endSessionButtonState[i] = true;
+                    if (window.confirm("End AR session?")) {
+                        renderer.xr.getSession().end();
+                    }
+                } else if (!controller.gamepad.buttons[5].pressed) {
+                    endSessionButtonState[i] = false;
+                }
+            }
+        }
+    }
 }
 
 async function placeScene(fY, loader, world, dynamicObjects) {
@@ -143,9 +195,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 
     // Create Bowling Pins
     const pinGltf = await loader.loadAsync('3d/pin.glb');
-    const pinModel = pinGltf.scene;
+    pinModel = pinGltf.scene;
     
-    let pinVertices;
     pinModel.traverse(child => {
         if (child.isMesh) {
             child.updateMatrixWorld(true);
@@ -163,6 +214,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         }
     });
 
+    createPins(fY);
+}
+
+function createPins(fY) {
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: fY, z: z };
@@ -170,7 +225,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
+        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -185,6 +240,27 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             createPin(x, z);
         }
     }
+}
+
+function resetPins() {
+    if (pinsFallenResetTimer) {
+        clearTimeout(pinsFallenResetTimer);
+        pinsFallenResetTimer = null;
+    }
+    allPinsFallen = false;
+
+    // Remove existing pins
+    const pinsToRemove = dynamicObjects.filter(obj => obj.isPin);
+    for (const pin of pinsToRemove) {
+        scene.remove(pin.mesh);
+        world.removeRigidBody(pin.body);
+    }
+
+    // Filter out the pins from dynamicObjects
+    dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
+
+    // Create new pins
+    createPins(fY_floor);
 }
 
 async function init() {
