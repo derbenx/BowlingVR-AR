@@ -186,32 +186,18 @@ scene.add(directionalLight);
     const groundMesh = laneGltf.scene;
     groundMesh.position.y=fY;
 
+    // Create a fixed rigid body for the lane.
+    const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY, 0);
+    const laneBody = world.createRigidBody(laneBodyDesc);
+
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            // update matrix world to get the correct transformations
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(
-                    originalVertices[i],
-                    originalVertices[i + 1],
-                    originalVertices[i + 2]
-                );
-                // apply the world matrix of the mesh to the vertex
-                tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i + 1] = tempVec.y;
-                transformedVertices[i + 2] = tempVec.z;
-            }
-
+            const vertices = child.geometry.attributes.position.array;
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices);
-            const collider = world.createCollider(trimeshDesc);
-            if (dbg) debugMeshManager.createMeshForCollider(collider);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+            world.createCollider(trimeshDesc, laneBody);
+            // No need for debug mesh for a static body
         }
     });
 
