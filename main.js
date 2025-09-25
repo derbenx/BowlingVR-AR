@@ -150,8 +150,30 @@ function animate(timestamp, frame) {
             }
         }
 
+        const dt = world.integrationParameters.dt;
         for (let i = 0; i < 2; i++) {
             const controller = renderer.xr.getController(i);
+
+            // Calculate linear velocity
+            const currentPosition = controller.position.clone();
+            controller.userData.linearVelocity = currentPosition.clone().sub(controller.userData.lastPosition).divideScalar(dt);
+            controller.userData.lastPosition.copy(currentPosition);
+
+            // Calculate angular velocity
+            const currentQuaternion = controller.quaternion.clone();
+            const deltaQuaternion = currentQuaternion.clone().multiply(controller.userData.lastQuaternion.clone().invert());
+
+            let angle = 2 * Math.acos(deltaQuaternion.w);
+            if (angle > Math.PI) {
+                angle -= 2 * Math.PI;
+            }
+            const axis = new THREE.Vector3(deltaQuaternion.x, deltaQuaternion.y, deltaQuaternion.z);
+            if (axis.lengthSq() > 0) {
+                axis.normalize();
+            }
+            controller.userData.angularVelocity = axis.multiplyScalar(angle / dt);
+            controller.userData.lastQuaternion.copy(currentQuaternion);
+
             if (controller && controller.gamepad) {
 
                 // Handle B/Y button (index 5) for exiting
@@ -413,8 +435,14 @@ async function init() {
             if (ball) {
                 ball.collider.setEnabled(true); // Re-enable collision on release
                 ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
-                const impulse = new THREE.Vector3(0, 0, -10).applyQuaternion(controller.quaternion);
-                ball.body.applyImpulse(impulse, true);
+
+                // Apply the controller's velocity to the ball
+                const throwVelocityMultiplier = 2.0;
+                const linearVelocity = controller.userData.linearVelocity.clone().multiplyScalar(throwVelocityMultiplier);
+                const angularVelocity = controller.userData.angularVelocity.clone().multiplyScalar(throwVelocityMultiplier);
+
+                ball.body.setLinvel(linearVelocity, true);
+                ball.body.setAngvel(angularVelocity, true);
             }
             holdingController = null;
         }
@@ -425,6 +453,11 @@ async function init() {
     function setupController(controllerIndex) {
         const controller = renderer.xr.getController(controllerIndex);
         controller.userData.controllerId = controllerIndex;
+        controller.userData.lastPosition = new THREE.Vector3();
+        controller.userData.lastQuaternion = new THREE.Quaternion();
+        controller.userData.linearVelocity = new THREE.Vector3();
+        controller.userData.angularVelocity = new THREE.Vector3();
+
 
         controller.addEventListener('connected', function (event) {
             this.gamepad = event.data.gamepad;
