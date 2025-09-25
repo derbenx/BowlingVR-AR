@@ -236,9 +236,18 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            const vertices = child.geometry.attributes.position.array;
+            const originalVertices = child.geometry.attributes.position.array;
+            const scaledVertices = new Float32Array(originalVertices.length);
+            const laneColliderWidthScale = 0.9; // Scale down the width to match visuals
+
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                scaledVertices[i] = originalVertices[i] * laneColliderWidthScale; // Scale X
+                scaledVertices[i + 1] = originalVertices[i + 1];                   // Y remains the same
+                scaledVertices[i + 2] = originalVertices[i + 2];                   // Z remains the same
+            }
+
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices).setRestitution(0.0);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(scaledVertices, indices).setRestitution(0.0);
             world.createCollider(trimeshDesc, laneBody);
         }
     });
@@ -265,7 +274,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(30).setFriction(.8);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(100).setFriction(.8);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
