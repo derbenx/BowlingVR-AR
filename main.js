@@ -5,7 +5,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
-import { XRPlanes } from './XRPlanes.js';
+import { XRPlanes } from 'three/addons/webxr/XRPlanes.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
@@ -174,8 +174,8 @@ scene.add(directionalLight);
     for (const planeMesh of planes.children) {
      fY = planeMesh.position.y<fY ? planeMesh.position.y : fY;
      console.log(planeMesh.position);
-     let pln=planeMesh.userData.xrPlane.semanticLabel ? planeMesh.userData.xrPlane.semanticLabel :planeMesh.userData.xrPlane._semanticLabel;
-     console.log(pln); //actually says 'floor', 'wall', 'ceiling'
+     //let pln=typeof planeMesh.userData.xrPlane.semanticLabel ? planeMesh.userData.xrPlane.semanticLabel : planeMesh.userData.xrPlane._semanticLabel;
+     //console.log(pln); //actually says 'floor', 'wall', 'ceiling'
     }
    //console.log(fY);
 
@@ -186,32 +186,18 @@ scene.add(directionalLight);
     const groundMesh = laneGltf.scene;
     groundMesh.position.y=fY;
 
+    // Create a fixed rigid body for the lane.
+    const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY, 0);
+    const laneBody = world.createRigidBody(laneBodyDesc);
+
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            // update matrix world to get the correct transformations
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(
-                    originalVertices[i],
-                    originalVertices[i + 1],
-                    originalVertices[i + 2]
-                );
-                // apply the world matrix of the mesh to the vertex
-                tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i + 1] = tempVec.y;
-                transformedVertices[i + 2] = tempVec.z;
-            }
-
+            const vertices = child.geometry.attributes.position.array;
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices);
-            const collider = world.createCollider(trimeshDesc);
-            if (dbg) debugMeshManager.createMeshForCollider(collider);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
+            world.createCollider(trimeshDesc, laneBody);
+            // No need for debug mesh for a static body
         }
     });
 
@@ -355,9 +341,20 @@ scene.add(directionalLight);
     controller1.addEventListener('select', onSelect);
     scene.add(controller1);
 
+    const controllerGrip1 = renderer.xr.getControllerGrip(0);
+    const model1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), new THREE.LineBasicMaterial({color: 0xff0000, linewidth: 5}));
+    controllerGrip1.add(model1);
+    scene.add(controllerGrip1);
+
     const controller2 = renderer.xr.getController(1);
     controller2.addEventListener('select', onSelect);
     scene.add(controller2);
+
+    const controllerGrip2 = renderer.xr.getControllerGrip(1);
+    const model2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), new THREE.LineBasicMaterial({color: 0x0000ff, linewidth: 5}));
+    controllerGrip2.add(model2);
+    scene.add(controllerGrip2);
+
 
 }
 
