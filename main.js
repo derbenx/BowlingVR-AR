@@ -28,6 +28,77 @@ async function main() {
 
     const loader = new GLTFLoader();
 
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 2, 5); // Move camera up and back
+    camera.lookAt(0, 0, 0);
+
+    const ambientLight = new THREE.AmbientLight(0x404040, 2); // soft white light
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 5, 5);
+    scene.add(directionalLight);
+
+    placementMatrix = new THREE.Matrix4();
+
+    renderer.setAnimationLoop(animate);
+
+    function onSelectStart(event) {
+        const controller = event.target;
+        if (holdingController === null) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
+                holdingController = controller;
+            }
+        }
+    }
+
+    function onSelectEnd(event) {
+        const controller = event.target;
+        if (holdingController === controller) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
+                const impulse = new THREE.Vector3(0, 0, -10).applyQuaternion(controller.quaternion);
+                ball.body.applyImpulse(impulse, true);
+            }
+            holdingController = null;
+        }
+    }
+
+    const controllerModelFactory = new XRControllerModelFactory();
+
+    function setupController(controllerIndex) {
+        const controller = renderer.xr.getController(controllerIndex);
+        controller.userData.controllerId = controllerIndex;
+
+        controller.addEventListener('connected', function () {
+            this.addEventListener('selectstart', onSelectStart);
+            this.addEventListener('selectend', onSelectEnd);
+        });
+
+        controller.addEventListener('disconnected', function () {
+            this.removeEventListener('selectstart', onSelectStart);
+            this.removeEventListener('selectend', onSelectEnd);
+        });
+
+        scene.add(controller);
+
+        const controllerGrip = renderer.xr.getControllerGrip(controllerIndex);
+        controllerGrip.add(controllerModelFactory.createControllerModel(controllerGrip));
+        scene.add(controllerGrip);
+    }
+
+    setupController(0);
+    setupController(1);
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
     const arButton = ARButton.createButton(renderer, {
         requiredFeatures: ['local-floor', 'plane-detection']
     });
@@ -60,14 +131,6 @@ async function main() {
           }
         });
       }
-
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 2, 5); // Move camera up and back
-    camera.lookAt(0, 0, 0);
-
-    placementMatrix = new THREE.Matrix4();
-
-    init();
 }
 
 function animate(timestamp, frame) {
@@ -114,15 +177,11 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY, 0);
     const laneBody = world.createRigidBody(laneBodyDesc);
 
-    // Create a trimesh collider from the lane's geometry
-    groundMesh.traverse(child => {
-        if (child.isMesh) {
-            const vertices = child.geometry.attributes.position.array;
-            const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
-            world.createCollider(trimeshDesc, laneBody);
-        }
-    });
+    // Create a cuboid collider for the lane
+    const groundBox = new THREE.Box3().setFromObject(groundMesh);
+    const groundSize = groundBox.getSize(new THREE.Vector3());
+    const groundColliderDesc = RAPIER.ColliderDesc.cuboid(groundSize.x / 2, 0.1, groundSize.z / 2);
+    world.createCollider(groundColliderDesc, laneBody);
 
     scene.add(groundMesh);
 
@@ -186,74 +245,6 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             createPin(x, z);
         }
     }
-    init();
-}
-
-async function init() {
-    const ambientLight = new THREE.AmbientLight(0x404040, 2); // soft white light
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-    directionalLight.position.set(5, 5, 5);
-    scene.add(directionalLight);
-
-    renderer.setAnimationLoop(animate);
-
-    function onSelectStart(event) {
-        const controller = event.target;
-        if (holdingController === null) {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball) {
-                ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
-                holdingController = controller;
-            }
-        }
-    }
-
-    function onSelectEnd(event) {
-        const controller = event.target;
-        if (holdingController === controller) {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball) {
-                ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
-                const impulse = new THREE.Vector3(0, 0, -10).applyQuaternion(controller.quaternion);
-                ball.body.applyImpulse(impulse, true);
-            }
-            holdingController = null;
-        }
-    }
-
-    const controllerModelFactory = new XRControllerModelFactory();
-
-    function setupController(controllerIndex) {
-        const controller = renderer.xr.getController(controllerIndex);
-        controller.userData.controllerId = controllerIndex;
-
-        controller.addEventListener('connected', function () {
-            this.addEventListener('selectstart', onSelectStart);
-            this.addEventListener('selectend', onSelectEnd);
-        });
-
-        controller.addEventListener('disconnected', function () {
-            this.removeEventListener('selectstart', onSelectStart);
-            this.removeEventListener('selectend', onSelectEnd);
-        });
-
-        scene.add(controller);
-
-        const controllerGrip = renderer.xr.getControllerGrip(controllerIndex);
-        controllerGrip.add(controllerModelFactory.createControllerModel(controllerGrip));
-        scene.add(controllerGrip);
-    }
-
-    setupController(0);
-    setupController(1);
-
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
 }
 
 main();
