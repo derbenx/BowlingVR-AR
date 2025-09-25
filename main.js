@@ -249,13 +249,23 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballGltf = await loader.loadAsync('3d/ball.glb');
     const ballMesh = ballGltf.scene;
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
+
+    // Center the geometry
+    const center = ballBox.getCenter(new THREE.Vector3());
+    ballMesh.children.forEach(child => {
+        if (child.isMesh) {
+            child.geometry.translate(-center.x, -center.y, -center.z);
+        }
+    });
+    ballBox.setFromObject(ballMesh); // Recalculate the box after centering
+
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
 
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(10).setFriction(.8);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(30).setFriction(.8);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
