@@ -130,7 +130,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: 0 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.1).setMass(10);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, initialPosition: ballInitialPosition, isBall: true });
