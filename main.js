@@ -366,8 +366,17 @@ scene.add(directionalLight);
     function setupController(controllerIndex) {
         const controller = renderer.xr.getController(controllerIndex);
         controller.userData.controllerId = controllerIndex;
-        controller.addEventListener('selectstart', onSelectStart);
-        controller.addEventListener('selectend', onSelectEnd);
+
+        controller.addEventListener('connected', function () {
+            this.addEventListener('selectstart', onSelectStart);
+            this.addEventListener('selectend', onSelectEnd);
+        });
+
+        controller.addEventListener('disconnected', function () {
+            this.removeEventListener('selectstart', onSelectStart);
+            this.removeEventListener('selectend', onSelectEnd);
+        });
+
         scene.add(controller);
 
         const controllerGrip = renderer.xr.getControllerGrip(controllerIndex);
