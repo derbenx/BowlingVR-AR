@@ -104,42 +104,16 @@ class DebugMeshManager {
 async function main() {
     await RAPIER.init();
     
-
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.xr.enabled = true;
-document.body.appendChild(renderer.domElement);
-document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor','plane-detection'] }));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true;
+    document.body.appendChild(renderer.domElement);
+    document.body.appendChild(ARButton.createButton(renderer, { requiredFeatures: ['local-floor','plane-detection'] }));
 
     // Setup plane detection
     planes = new XRPlanes(renderer);
-    //planes.visible = false;
-    //scene.add(planes);
+    scene.add(planes);
 
- ARcheck=setInterval(check,150);
-
- if (navigator.xr && navigator.xr.isSessionSupported) {
-    navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-      if (supported && navigator.xr.requestSession) {
-        navigator.xr.requestSession('immersive-vr', {
-          //optionalFeatures: ['local-floor'],
-          optionalFeatures: ['local-floor','plane-detection'],
-        })
-        .then((session) => {renderer.xr.setSession(session);});
-      }
-    });
-  }
-}
-
-function check(){
- 
- if (renderer.xr.isPresenting && planes.children.length){
-   //console.log(planeMesh.userData.xrPlane._semanticLabel);
-   console.log(planes.children[0]);
-   console.log(planes.children[0].position.y);
-  clearInterval(ARcheck);
-  init(); 
- }
- //console.log(planes.children.length);
+    init();
 }
 async function init() {
 
@@ -147,6 +121,7 @@ async function init() {
     if (dbg) {
         debugMeshManager = new DebugMeshManager(scene, world);
     }
+    let dynamicObjects = [];
 
     //const gravity = { x: 0.0, y: -.5 , z: 0.0 };
     //const gravity = { x: 0.0, y: -9.81, z: 0.0 };
@@ -170,25 +145,29 @@ scene.add(directionalLight);
     const loader = new GLTFLoader();
 
 
-    var fY=0;
-    //console.log(planes.children);
-    for (const planeMesh of planes.children) {
-     fY = planeMesh.position.y<fY ? planeMesh.position.y : fY;
-     console.log(planeMesh.position);
-     //let pln=typeof planeMesh.userData.xrPlane.semanticLabel ? planeMesh.userData.xrPlane.semanticLabel : planeMesh.userData.xrPlane._semanticLabel;
-     //console.log(pln); //actually says 'floor', 'wall', 'ceiling'
-    }
-   //console.log(fY);
+    renderer.xr.addEventListener('sessionstart', () => {
+        let fY = 0;
+        const checkFloor = setInterval(() => {
+            if (planes.children.length > 0) {
+                for (const planeMesh of planes.children) {
+                    fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+                }
+                clearInterval(checkFloor);
+                placeScene(fY);
+            }
+        }, 150);
+    });
 
-    // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/lane.glb');
-   
-    // Visual ground and Physics Ground
-    const groundMesh = laneGltf.scene;
-    groundMesh.position.y=fY;
+    async function placeScene(fY) {
+        // Load Lane Model
+        const laneGltf = await loader.loadAsync('3d/lane.glb');
 
-    // Create a fixed rigid body for the lane.
-    const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY, 0);
+        // Visual ground and Physics Ground
+        const groundMesh = laneGltf.scene;
+        groundMesh.position.y = fY;
+
+        // Create a fixed rigid body for the lane.
+        const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY, 0);
     const laneBody = world.createRigidBody(laneBodyDesc);
 
     // Create a trimesh collider from the lane's geometry
@@ -198,17 +177,10 @@ scene.add(directionalLight);
             const indices = child.geometry.index.array;
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(vertices, indices);
             world.createCollider(trimeshDesc, laneBody);
-            // No need for debug mesh for a static body
         }
     });
 
     scene.add(groundMesh);
-
-
-    
-
-    // Array to hold dynamic objects
-    let dynamicObjects = [];
 
     // Create Bowling Ball
     const ballGltf = await loader.loadAsync('3d/ball.glb');
@@ -217,7 +189,7 @@ scene.add(directionalLight);
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
 
-    const ballInitialPosition = { x: 0, y: fY+.5 , z: 0  };
+    const ballInitialPosition = { x: 0, y: fY + 0.5, z: 0 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
     const ballBody = world.createRigidBody(ballBodyDesc);
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius);
@@ -232,7 +204,6 @@ scene.add(directionalLight);
     const pinGltf = await loader.loadAsync('3d/pin.glb');
     const pinModel = pinGltf.scene;
     
-    // Extract transformed vertices from the pin model for the convex hull
     let pinVertices;
     pinModel.traverse(child => {
         if (child.isMesh) {
@@ -253,35 +224,27 @@ scene.add(directionalLight);
 
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
-
-        // The initial position for both the mesh and the body is the center of the physics shape.
         const initialPosition = { x: x, y: fY, z: z };
-
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
-
-        // Create a convex hull collider from the pin's geometry
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
         const collider = world.createCollider(colliderDesc, pinBody);
         if (dbg) debugMeshManager.createMeshForCollider(collider, pinVertices);
-
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
 
-    // Layout pins in a triangle
-    const pinSpacing = 0.2 ;
-    const pinStartZ = -3.5 ;
-    let pinCount = 0;
+    const pinSpacing = 0.2;
+    const pinStartZ = -3.5;
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
             const x = (i - row / 2) * pinSpacing * 2;
-            const z = pinStartZ - row * pinSpacing * 1.732; // 1.732 is ~sqrt(3) for equilateral triangle
+            const z = pinStartZ - row * pinSpacing * 1.732;
             createPin(x, z);
-            pinCount++;
         }
     }
+}
 
 
     let placementMatrix = new THREE.Matrix4();
