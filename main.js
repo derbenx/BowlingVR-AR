@@ -6,6 +6,7 @@ import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { XRPlanes } from 'three/addons/webxr/XRPlanes.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
@@ -294,6 +295,15 @@ scene.add(directionalLight);
         if (dbg) debugMeshManager.update();
 
         // Update all dynamic objects
+        if (holdingController) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                const controllerGrip = renderer.xr.getControllerGrip(holdingController.userData.controllerId);
+                ball.body.setNextKinematicTranslation(controllerGrip.position);
+                ball.body.setNextKinematicRotation(controllerGrip.quaternion);
+            }
+        }
+
         dynamicObjects.forEach(obj => {
             const body = obj.body;
             const mesh = obj.mesh;
@@ -325,35 +335,48 @@ scene.add(directionalLight);
     // Start the animation
     renderer.setAnimationLoop(animate);
 
-    function onSelect() {
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball) {
-            const isIdle = Math.abs(ball.body.linvel().z) < 0.1 && Math.abs(ball.body.linvel().x) < 0.1;
-            if (isIdle) {
-                const placementQuaternion = new THREE.Quaternion().setFromRotationMatrix(placementMatrix);
-                const impulse = new THREE.Vector3(0, 0, -0.4).applyQuaternion(placementQuaternion);
-                ball.body.applyImpulse(impulse, true);
+    let holdingController = null;
+
+    function onSelectStart(event) {
+        const controller = event.target;
+        if (holdingController === null) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
+                holdingController = controller;
             }
         }
     }
 
-    const controller1 = renderer.xr.getController(0);
-    controller1.addEventListener('select', onSelect);
-    scene.add(controller1);
+    function onSelectEnd(event) {
+        const controller = event.target;
+        if (holdingController === controller) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
+                const impulse = new THREE.Vector3(0, 0, -10).applyQuaternion(controller.quaternion);
+                ball.body.applyImpulse(impulse, true);
+            }
+            holdingController = null;
+        }
+    }
 
-    const controllerGrip1 = renderer.xr.getControllerGrip(0);
-    const model1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), new THREE.LineBasicMaterial({color: 0xff0000, linewidth: 5}));
-    controllerGrip1.add(model1);
-    scene.add(controllerGrip1);
+    const controllerModelFactory = new XRControllerModelFactory();
 
-    const controller2 = renderer.xr.getController(1);
-    controller2.addEventListener('select', onSelect);
-    scene.add(controller2);
+    function setupController(controllerIndex) {
+        const controller = renderer.xr.getController(controllerIndex);
+        controller.userData.controllerId = controllerIndex;
+        controller.addEventListener('selectstart', onSelectStart);
+        controller.addEventListener('selectend', onSelectEnd);
+        scene.add(controller);
 
-    const controllerGrip2 = renderer.xr.getControllerGrip(1);
-    const model2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]), new THREE.LineBasicMaterial({color: 0x0000ff, linewidth: 5}));
-    controllerGrip2.add(model2);
-    scene.add(controllerGrip2);
+        const controllerGrip = renderer.xr.getControllerGrip(controllerIndex);
+        controllerGrip.add(controllerModelFactory.createControllerModel(controllerGrip));
+        scene.add(controllerGrip);
+    }
+
+    setupController(0);
+    setupController(1);
 
 
 }
