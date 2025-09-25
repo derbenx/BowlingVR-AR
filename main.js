@@ -16,15 +16,15 @@ const GROUP_FLOOR = 1 << 3;
 
 // Defines what a group is and what it collides with.
 // The 16 left-most bits are memberships, the 16 right-most bits are the filter.
-const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL);
+const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL | GROUP_PINS);
 // Ball collides with Lane, Pins, and Floor
 const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GROUP_FLOOR);
-// Held ball collides with Lane and Floor (so it doesn't fall through the world if dropped)
+// Held ball collides with Lane and Floor
 const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_FLOOR);
-// Pins collide with Ball, other Pins, and Floor
-const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_FLOOR);
-// Floor collides with Ball and Pins
-const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL | GROUP_PINS);
+// Pins collide with the Ball, other Pins, and the Lane (but NOT the infinite floor)
+const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE);
+// Floor collides with the Ball ONLY
+const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
@@ -46,6 +46,7 @@ let laneObject = null;
 let laneCollisionVisualizer = null;
 let floorBody = null;
 let controllerWantsToHold = null;
+let visdb=0;//debug stuff
 
 async function main() {
     await RAPIER.init();
@@ -289,15 +290,17 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
             world.createCollider(trimeshDesc, laneBody);
 
-            // Create and add the visualizer mesh
-            const visualizerGeo = new THREE.BufferGeometry();
-            visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-            visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-            const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-            laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-            // Position it at the rigid body's location (which is currently the origin)
-            laneCollisionVisualizer.position.copy(bodyPosition);
-            scene.add(laneCollisionVisualizer);
+            if (visdb){
+                // Create and add the visualizer mesh
+                const visualizerGeo = new THREE.BufferGeometry();
+                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
+                // Position it at the rigid body's location (which is currently the origin)
+                laneCollisionVisualizer.position.copy(bodyPosition);
+                scene.add(laneCollisionVisualizer);
+            }
         }
     });
 
