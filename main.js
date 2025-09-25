@@ -310,7 +310,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Create an infinite floor plane to prevent objects from falling through
     const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
-    const floorColliderDesc = RAPIER.ColliderDesc.halfspace(0, 1, 0)
+    const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
     world.createCollider(floorColliderDesc, floorBody);
