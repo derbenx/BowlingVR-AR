@@ -19,7 +19,7 @@ let camera;
 
 async function main() {
     await RAPIER.init();
-    
+
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
@@ -29,21 +29,22 @@ async function main() {
     const loader = new GLTFLoader();
 
     const arButton = ARButton.createButton(renderer, {
-        requiredFeatures: ['local-floor', 'plane-detection'],
-        onSessionStart: () => {
-            let fY = 0;
-            const checkFloor = setInterval(() => {
-                if (planes.children.length > 0) {
-                    for (const planeMesh of planes.children) {
-                        fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-                    }
-                    clearInterval(checkFloor);
-                    placeScene(fY, loader, world, dynamicObjects);
-                }
-            }, 150);
-        }
+        requiredFeatures: ['local-floor', 'plane-detection']
     });
     document.body.appendChild(arButton);
+
+    renderer.xr.addEventListener('sessionstart', () => {
+        let fY = 0;
+        const checkFloor = setInterval(() => {
+            if (planes.children.length > 0) {
+                for (const planeMesh of planes.children) {
+                    fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+                }
+                clearInterval(checkFloor);
+                placeScene(fY, loader, world, dynamicObjects);
+            }
+        }, 150);
+    });
 
     // Setup plane detection
     planes = new XRPlanes(renderer);
