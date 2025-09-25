@@ -24,6 +24,7 @@ let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
+let laneObject = null;
 
 async function main() {
     await RAPIER.init();
@@ -55,6 +56,8 @@ async function main() {
             }
         }, 150);
     });
+
+    renderer.xr.addEventListener('sessionend', cleanupScene);
 
     // Setup plane detection
     planes = new XRPlanes(renderer);
@@ -196,6 +199,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         // Create a fixed rigid body for the lane.
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(InitialPosition.x, InitialPosition.y, InitialPosition.z);
     const laneBody = world.createRigidBody(laneBodyDesc);
+    laneObject = { mesh: groundMesh, body: laneBody };
 
     // Create a trimesh collider from the lane's geometry
     groundMesh.traverse(child => {
@@ -332,6 +336,36 @@ function createExitConfirmationMesh() {
     const mesh = new THREE.Mesh(geometry, material);
 
     return mesh;
+}
+
+function cleanupScene() {
+    // Dismiss any active UI
+    dismissExitConfirmation();
+
+    // Clear any pending timers
+    if (pinsFallenResetTimer) {
+        clearTimeout(pinsFallenResetTimer);
+    }
+
+    // Remove all dynamic objects (pins and ball)
+    for (const obj of dynamicObjects) {
+        scene.remove(obj.mesh);
+        world.removeRigidBody(obj.body);
+    }
+    dynamicObjects = [];
+
+    // Remove the lane
+    if (laneObject) {
+        scene.remove(laneObject.mesh);
+        world.removeRigidBody(laneObject.body);
+        laneObject = null;
+    }
+
+    // Reset state variables
+    holdingController = null;
+    allPinsFallen = false;
+    resetButtonState = [false, false];
+    endSessionButtonState = [false, false];
 }
 
 async function init() {
