@@ -309,7 +309,8 @@ async function init() {
         const controller = renderer.xr.getController(controllerIndex);
         controller.userData.controllerId = controllerIndex;
 
-        controller.addEventListener('connected', function () {
+        controller.addEventListener('connected', function (event) {
+            this.gamepad = event.data.gamepad;
             this.addEventListener('selectstart', onSelectStart);
             this.addEventListener('selectend', onSelectEnd);
         });
