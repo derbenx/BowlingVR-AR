@@ -338,7 +338,8 @@ scene.add(directionalLight);
         }
     }
 
-    const controllerModelFactory = new XRControllerModelFactory();
+    const controllerModelFactory = new XRControllerModelFactory()
+        .setPath( 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/models/gltf/' );
 
     const controller1 = renderer.xr.getController(0);
     controller1.addEventListener('select', onSelect);
@@ -346,6 +347,12 @@ scene.add(directionalLight);
 
     const controllerGrip1 = renderer.xr.getControllerGrip(0);
     const controllerModel1 = controllerModelFactory.createControllerModel(controllerGrip1);
+    controllerModel1.addEventListener('model-loaded', (event) => {
+        console.log('Controller model 1 loaded successfully.');
+    });
+    controllerModel1.addEventListener('model-error', (event) => {
+        console.error('Error loading controller model 1:', event.error);
+    });
     controllerGrip1.add(controllerModel1);
     scene.add(controllerGrip1);
 
@@ -355,8 +362,15 @@ scene.add(directionalLight);
 
     const controllerGrip2 = renderer.xr.getControllerGrip(1);
     const controllerModel2 = controllerModelFactory.createControllerModel(controllerGrip2);
+    controllerModel2.addEventListener('model-loaded', (event) => {
+        console.log('Controller model 2 loaded successfully.');
+    });
+    controllerModel2.addEventListener('model-error', (event) => {
+        console.error('Error loading controller model 2:', event.error);
+    });
     controllerGrip2.add(controllerModel2);
     scene.add(controllerGrip2);
+
 
 }
 
