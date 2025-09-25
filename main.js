@@ -61,6 +61,12 @@ async function main() {
         });
       }
 
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 2, 5); // Move camera up and back
+    camera.lookAt(0, 0, 0);
+
+    placementMatrix = new THREE.Matrix4();
+
     init();
 }
 
@@ -128,7 +134,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballRadius = ballSize.x / 2;
 
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: 0 };
-    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z);
+    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.1).setMass(10);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
@@ -162,9 +168,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     function createPin(x, z) {
         const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: fY, z: z };
-        const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
+        const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z).setAngularDamping(1.0);
         const pinBody = world.createRigidBody(pinBodyDesc);
-        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
+        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setMass(0.5);
         const collider = world.createCollider(colliderDesc, pinBody);
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition });
         scene.add(pinMesh);
@@ -180,13 +186,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             createPin(x, z);
         }
     }
+    init();
 }
 
 async function init() {
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(0, 2, 5); // Move camera up and back
-    camera.lookAt(0, 0, 0);
-
     const ambientLight = new THREE.AmbientLight(0x404040, 2); // soft white light
     scene.add(ambientLight);
 
@@ -194,8 +197,6 @@ async function init() {
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
-    placementMatrix = new THREE.Matrix4();
-    
     renderer.setAnimationLoop(animate);
 
     function onSelectStart(event) {
