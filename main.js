@@ -155,26 +155,9 @@ function animate(timestamp, frame) {
     if (renderer.xr.isPresenting) {
         const pins = dynamicObjects.filter(obj => obj.isPin);
         if (pins.length > 0) {
-            let fallenPins = 0;
-            for (const pin of pins) {
-                // Check orientation
-                const up = new THREE.Vector3(0, 1, 0);
-                const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-                const pinUp = up.clone().applyQuaternion(quaternion);
-                const isTippedOver = pinUp.y < 0.5;
+            const fallenPins = getFallenPins();
 
-                // Check distance from start
-                const currentPosition = new THREE.Vector3().copy(pin.body.translation());
-                const initialPositionVec = new THREE.Vector3(pin.initialPosition.x, pin.initialPosition.y, pin.initialPosition.z);
-                const distance = currentPosition.distanceTo(initialPositionVec);
-                const isFarAway = distance > 1.0; // 1 meter threshold
-
-                if (isTippedOver || isFarAway) {
-                    fallenPins++;
-                }
-            }
-
-            if (fallenPins === pins.length && !allPinsFallen) {
+            if (fallenPins.length === pins.length && !allPinsFallen) {
                 allPinsFallen = true;
                 pinsFallenResetTimer = setTimeout(() => {
                     resetPins();
@@ -394,6 +377,42 @@ function createPins(fY) {
     }
 }
 
+function clearFallenPins() {
+    const fallenPins = getFallenPins();
+    if (fallenPins.length > 0) {
+        for (const pin of fallenPins) {
+            scene.remove(pin.mesh);
+            world.removeRigidBody(pin.body);
+        }
+        // Filter out the removed pins from dynamicObjects
+        dynamicObjects = dynamicObjects.filter(obj => !fallenPins.includes(obj));
+    }
+}
+
+function getFallenPins() {
+    const fallenPins = [];
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+
+    for (const pin of pins) {
+        // Check orientation
+        const up = new THREE.Vector3(0, 1, 0);
+        const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+        const pinUp = up.clone().applyQuaternion(quaternion);
+        const isTippedOver = pinUp.y < 0.5;
+
+        // Check distance from start
+        const currentPosition = new THREE.Vector3().copy(pin.body.translation());
+        const initialPositionVec = new THREE.Vector3(pin.initialPosition.x, pin.initialPosition.y, pin.initialPosition.z);
+        const distance = currentPosition.distanceTo(initialPositionVec);
+        const isFarAway = distance > 1.0; // 1 meter threshold
+
+        if (isTippedOver || isFarAway) {
+            fallenPins.push(pin);
+        }
+    }
+    return fallenPins;
+}
+
 function resetPins() {
     dismissExitConfirmation();
     if (pinsFallenResetTimer) {
@@ -525,6 +544,9 @@ async function init() {
     function onSelectStart(event) {
         const controller = event.target;
         if (holdingController === null) {
+            // If we're not holding anything, first clear any pins that have fallen
+            clearFallenPins();
+
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
                 // Set the collision group immediately to prevent collision on the next physics step.
