@@ -400,13 +400,7 @@ function getFallenPins() {
         const pinUp = up.clone().applyQuaternion(quaternion);
         const isTippedOver = pinUp.y < 0.5;
 
-        // Check distance from start
-        const currentPosition = new THREE.Vector3().copy(pin.body.translation());
-        const initialPositionVec = new THREE.Vector3(pin.initialPosition.x, pin.initialPosition.y, pin.initialPosition.z);
-        const distance = currentPosition.distanceTo(initialPositionVec);
-        const isFarAway = distance > 1.0; // 1 meter threshold
-
-        if (isTippedOver || isFarAway) {
+        if (isTippedOver) {
             fallenPins.push(pin);
         }
     }
@@ -544,15 +538,22 @@ async function init() {
     function onSelectStart(event) {
         const controller = event.target;
         if (holdingController === null) {
-            // If we're not holding anything, first clear any pins that have fallen
-            clearFallenPins();
-
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                // Set the collision group immediately to prevent collision on the next physics step.
-                ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
-                // Register the intent to hold, which will be processed in the animate loop after the next physics step.
-                controllerWantsToHold = controller;
+                const linvel = ball.body.linvel();
+                const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
+                const position = ball.body.translation();
+                const isBelowFloor = position.y < fY_floor;
+
+                if (!isMoving || isBelowFloor) {
+                    // If the ball is not moving or has fallen, clear the fallen pins
+                    clearFallenPins();
+
+                    // Set the collision group immediately to prevent collision on the next physics step.
+                    ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+                    // Register the intent to hold, which will be processed in the animate loop after the next physics step.
+                    controllerWantsToHold = controller;
+                }
             }
         }
     }
