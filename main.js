@@ -8,6 +8,24 @@ import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { XRPlanes } from 'three/addons/webxr/XRPlanes.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
+// Collision Groups
+const GROUP_LANE = 1 << 0;
+const GROUP_BALL = 1 << 1;
+const GROUP_PINS = 1 << 2;
+const GROUP_FLOOR = 1 << 3;
+
+// Defines what a group is and what it collides with.
+// The 16 left-most bits are memberships, the 16 right-most bits are the filter.
+const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL | GROUP_PINS);
+// Ball collides with Lane, Pins, and Floor
+const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GROUP_FLOOR);
+// Held ball collides with Lane and Floor
+const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_FLOOR);
+// Pins collide with the Ball, other Pins, and the Lane (but NOT the infinite floor)
+const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE);
+// Floor collides with the Ball ONLY
+const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
@@ -25,8 +43,10 @@ let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
 let laneObject = null;
+let floorBody = null;
+let controllerWantsToHold = null;
 let visdb=0;//debug stuff
-let laneCollisionVisualizer = null; //debug stuff
+let laneCollisionVisualizer = null;
 
 async function main() {
     await RAPIER.init();
@@ -82,6 +102,17 @@ async function main() {
 function animate(timestamp, frame) {
     // Step the physics world first
     if(world) world.step();
+
+    // If a grab was initiated in the last frame, complete it now.
+    // This one-frame delay ensures the collision group change is processed before the ball is moved.
+    if (controllerWantsToHold) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
+            holdingController = controllerWantsToHold;
+        }
+        controllerWantsToHold = null;
+    }
 
     // Update all dynamic objects
     if (holdingController) {
@@ -226,19 +257,21 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         // Visual ground and Physics Ground
         const groundMesh = laneGltf.scene;
 
-
-        // Create a fixed rigid body for the lane.
+        // Create a fixed rigid body for the lane at the origin.
+        // We will set its final position after creating all components.
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
-    const laneBody = world.createRigidBody(laneBodyDesc);
-    laneObject = { mesh: groundMesh, body: laneBody };
+        const laneBody = world.createRigidBody(laneBodyDesc);
+        laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create a trimesh collider from the lane's geometry
+    // Create a trimesh collider that is correctly scaled to the visual model
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            child.updateMatrixWorld(true);
+            child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
             const originalVertices = child.geometry.attributes.position.array;
             const transformedVertices = new Float32Array(originalVertices.length);
             const tempVec = new THREE.Vector3();
+            // The body is at the origin, so its position is (0,0,0).
+            // This means the transformed vertices will be in the body's local space, which is what we want.
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
             for (let i = 0; i < originalVertices.length; i += 3) {
@@ -254,27 +287,37 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             }
 
             const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0);
+            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
             world.createCollider(trimeshDesc, laneBody);
 
-if (visdb){
-            // Create and add the visualizer mesh
-            const visualizerGeo = new THREE.BufferGeometry();
-            visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-            visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-            const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-            laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-            laneCollisionVisualizer.position.copy(bodyPosition); // Position it at the rigid body's location
-            scene.add(laneCollisionVisualizer);
-}
+            if (visdb){
+                // Create and add the visualizer mesh
+                const visualizerGeo = new THREE.BufferGeometry();
+                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
+                // Position it at the rigid body's location (which is currently the origin)
+                laneCollisionVisualizer.position.copy(bodyPosition);
+                scene.add(laneCollisionVisualizer);
+            }
         }
     });
 
     scene.add(groundMesh);
 
+    // Set the initial position for all lane components using the new function
     const initialPosition = new THREE.Vector3(0, fY, -2);
     setLanePosition(initialPosition);
-    
+
+    // Create an infinite floor plane to prevent objects from falling through
+    const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor-.25, 0);
+    floorBody = world.createRigidBody(floorBodyDesc);
+    const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
+        .setCollisionGroups(FLOOR_COLLISION_GROUP)
+        .setRestitution(0.2);
+    world.createCollider(floorColliderDesc, floorBody);
+
     // Create Bowling Ball
     const ballGltf = await loader.loadAsync('3d/ball.glb');
     const ballMesh = ballGltf.scene;
@@ -295,7 +338,7 @@ if (visdb){
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(150).setFriction(.8);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(9999).setFriction(.8).setCollisionGroups(BALL_COLLISION_GROUP);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
@@ -332,7 +375,7 @@ function createPins(fY) {
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
-        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices);
+        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
         scene.add(pinMesh);
@@ -340,7 +383,7 @@ function createPins(fY) {
     }
 
     const pinSpacing = 0.2;
-    const pinStartZ = -5; //where pins are located!
+    const pinStartZ = -7; //where pins are located!
     
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
@@ -397,7 +440,7 @@ function createExitConfirmationMesh() {
     context.fillStyle = 'white';
     context.font = '30px sans-serif';
     context.textAlign = 'center';
-    context.fillText('Press B/Y again to exit', canvas.width / 2, canvas.height / 2 - 20);
+    context.fillText('Press B/Y again to exit.', canvas.width / 2, canvas.height / 2 - 20);
     context.fillText('Any other key to close this.', canvas.width / 2, canvas.height / 2 + 20);
 
     const texture = new THREE.CanvasTexture(canvas);
@@ -424,6 +467,7 @@ function setLanePosition(position) {
         laneCollisionVisualizer.position.copy(position);
     }
 }
+
 function cleanupScene() {
     // Dismiss any active UI
     dismissExitConfirmation();
@@ -449,6 +493,10 @@ function cleanupScene() {
     if (laneCollisionVisualizer) {
         scene.remove(laneCollisionVisualizer);
         laneCollisionVisualizer = null;
+    }
+    if (floorBody) {
+        world.removeRigidBody(floorBody);
+        floorBody = null;
     }
 
     // Reset state variables
@@ -479,9 +527,10 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                ball.collider.setEnabled(false); // Disable collision while holding
-                ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
-                holdingController = controller;
+                // Set the collision group immediately to prevent collision on the next physics step.
+                ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+                // Register the intent to hold, which will be processed in the animate loop after the next physics step.
+                controllerWantsToHold = controller;
             }
         }
     }
@@ -491,13 +540,13 @@ async function init() {
         if (holdingController === controller) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                ball.collider.setEnabled(true); // Re-enable collision on release
+                ball.collider.setCollisionGroups(BALL_COLLISION_GROUP); // Re-enable collision with pins
                 ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
 
                 // Apply the controller's velocity to the ball
-                const throwVelocityMultiplier = 2.0;
+                const throwVelocityMultiplier = 1.1;
                 const linearVelocity = controller.userData.linearVelocity.clone().multiplyScalar(throwVelocityMultiplier);
-                const angularVelocity = controller.userData.angularVelocity.clone().multiplyScalar(throwVelocityMultiplier);
+                const angularVelocity = controller.userData.angularVelocity.clone();//.multiplyScalar(throwVelocityMultiplier);
 
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
