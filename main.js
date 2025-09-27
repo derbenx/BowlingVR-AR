@@ -35,6 +35,7 @@ let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
 let pinModel, pinVertices, fY_floor;
+let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let pinsFallenResetTimer = null;
@@ -42,6 +43,7 @@ let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
+let floorOffsetSaveTimer = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
@@ -192,6 +194,26 @@ function animate(timestamp, frame) {
 
             if (controller && controller.gamepad) {
 
+                // Handle floor height adjustment with grip and thumbstick
+                if (controller.gamepad.buttons[1].pressed) { // Grip button
+                    const thumbstickY = controller.gamepad.axes[3];
+                    if (Math.abs(thumbstickY) > 0.1) {
+                        floorOffset += thumbstickY * -0.01; // Adjust speed and direction
+                        updateFloorAndLanePosition();
+
+                        // Clear any existing timer
+                        if (floorOffsetSaveTimer) {
+                            clearTimeout(floorOffsetSaveTimer);
+                        }
+
+                        // Set a new timer to save after 2 minutes of inactivity
+                        floorOffsetSaveTimer = setTimeout(() => {
+                            localStorage.setItem('floorOffset', floorOffset);
+                            floorOffsetSaveTimer = null;
+                        }, 120000); // 2 minutes
+                    }
+                }
+
                 // Handle B/Y button (index 5) for exiting
                 if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                     endSessionButtonState[i] = true; // Mark as pressed
@@ -294,12 +316,15 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     setLanePosition(initialPosition);
 
     // Create an infinite floor plane to prevent objects from falling through
-    const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor-.25, 0);
+    const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor - 0.25, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
     const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
     world.createCollider(floorColliderDesc, floorBody);
+
+    // Apply initial floor offset from localStorage
+    updateFloorAndLanePosition();
 
     // Create Bowling Ball
     const ballGltf = await loader.loadAsync('3d/ball.glb');
@@ -426,7 +451,7 @@ function resetPins() {
     dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
 
     // Create new pins
-    createPins(fY_floor);
+    createPins(fY_floor + floorOffset);
 }
 
 function dismissExitConfirmation() {
@@ -464,6 +489,18 @@ function createExitConfirmationMesh() {
     const mesh = new THREE.Mesh(geometry, material);
 
     return mesh;
+}
+
+function updateFloorAndLanePosition() {
+    if (laneObject) {
+        const newPos = laneObject.mesh.position.clone();
+        newPos.y = fY_floor + floorOffset;
+        setLanePosition(newPos);
+    }
+    if (floorBody) {
+        const floorPosition = floorBody.translation();
+        floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
+    }
 }
 
 function setLanePosition(position) {
@@ -543,12 +580,14 @@ async function init() {
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
                 const position = ball.body.translation();
-                if (position.y < fY_floor+.1 && position.y > fY_floor) {console.log('gutter');}
-                else if (position.y < fY_floor){console.log('ground');}
+                const adjustedFloorY = fY_floor + floorOffset;
+
+                if (position.y < adjustedFloorY + .1 && position.y > adjustedFloorY) {console.log('gutter');}
+                else if (position.y < adjustedFloorY){console.log('ground');}
                 else {console.log('lane');}
 
-                const isBelowFloor = position.y < fY_floor+.1; 
-                //console.log(position.y,fY_floor+.1);
+                const isBelowFloor = position.y < adjustedFloorY + .1;
+                //console.log(position.y, adjustedFloorY + .1);
 
                 if (!isMoving || isBelowFloor) {
                     // If the ball is not moving or has fallen, clear the fallen pins
