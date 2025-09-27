@@ -57,6 +57,8 @@ let scoreData = [];
 let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
+let isBallThrown = false;
+let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
 let laneObject = null;
@@ -66,81 +68,67 @@ let showCollision=0;//debug stuff
 let showButtons = 0;
 let laneCollisionVisualizer = null;
 
-function updateButtonAppearance(button, hovered, selected) {
-    if (!button) return;
-    const context = button.userData.context;
-    const canvas = button.userData.canvas;
-    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
-
-    // Button style
-    context.fillStyle = hovered ? '#666' : '#444'; // Highlight color for hover
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Border style
-    if (selected) {
-        context.strokeStyle = '#0F0'; // Green for selected
-    } else {
-        context.strokeStyle = hovered ? '#FFF' : '#888'; // White for hover, grey for default
-    }
-    context.lineWidth = 10;
-    context.strokeRect(0, 0, canvas.width, canvas.height);
-
-    context.fillStyle = 'white';
-    context.font = 'bold 40px sans-serif';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(text, canvas.width / 2, canvas.height / 2);
-
-    button.material.map.needsUpdate = true;
-}
-
 function createOptionsMenu() {
     const menu = new THREE.Group();
     menu.name = "optionsMenu";
-    menu.userData.buttons = []; // Initialize a dedicated array for buttons
+    menu.userData.buttons = [];
 
-    // Create background panel
     const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
     const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
     const panel = new THREE.Mesh(panelGeo, panelMat);
     menu.add(panel);
 
-    // Function to create a button with text
+    const updateButtonAppearance = (button, selected) => {
+        const context = button.userData.context;
+        const canvas = button.userData.canvas;
+        const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+        context.fillStyle = '#444';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.lineWidth = 10;
+        context.strokeRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'white';
+        context.font = 'bold 40px sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(text, canvas.width / 2, canvas.height / 2);
+        button.material.map.needsUpdate = true;
+    };
+
     function createButton(text, yPos, mode) {
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 128;
         const context = canvas.getContext('2d');
-
         const texture = new THREE.CanvasTexture(canvas);
         const geometry = new THREE.PlaneGeometry(0.5, 0.15);
         const material = new THREE.MeshBasicMaterial({ map: texture });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.y = yPos;
-        mesh.position.z = 0.01; // Add a small offset to prevent Z-fighting
+        mesh.position.z = 0.01;
         mesh.name = `button_${mode}`;
-        mesh.userData.mode = mode; // Store the mode for identification
+        mesh.userData.mode = mode;
         mesh.userData.isButton = true;
         mesh.userData.canvas = canvas;
         mesh.userData.context = context;
-
-        updateButtonAppearance(mesh, false, false); // Initial draw
-
+        updateButtonAppearance(mesh, false);
         return mesh;
     }
 
-    // Create buttons
     const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
     const scoringButton = createButton('Scoring', -0.1, 'scoring');
-
     menu.add(freePlayButton);
     menu.add(scoringButton);
+    menu.userData.buttons.push(freePlayButton);
+    menu.userData.buttons.push(scoringButton);
 
-    // Add buttons to the dedicated array, ensuring correct order
-    menu.userData.buttons.push(freePlayButton); // index 0
-    menu.userData.buttons.push(scoringButton); // index 1
+    menu.userData.update = () => {
+        menu.userData.buttons.forEach((btn, index) => {
+            updateButtonAppearance(btn, index === selectedMenuIndex);
+        });
+    };
 
-    menu.visible = false; // Initially hidden
+    menu.visible = false;
     scene.add(menu);
     return menu;
 }
@@ -154,7 +142,7 @@ function updateGameModeUI() {
                 scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
             }
             scoreboard.visible = true;
-            resetScoreboard(); // Load placeholder data and draw
+            startNewGame();
         }
     } else { // 'freeplay'
         if (scoreboard) {
@@ -259,33 +247,241 @@ function drawScoreboard() {
     scoreboard.material.map.needsUpdate = true;
 }
 
-function resetScoreboard() {
-    // This is placeholder data to test the display logic.
-    scoreData = [
-        { rolls: ['7', '2'], frameScore: '9' },
-        { rolls: ['9', '/'], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '19' },
-        { rolls: ['8', '1'], frameScore: '9' },
-        { rolls: ['X', ''], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '29' },
-        { rolls: ['9', '0'], frameScore: '9' },
-        { rolls: ['8', '/'], frameScore: '20' },
-        { rolls: ['X', 'X', 'X'], frameScore: '30' }
-    ];
+function startNewGame() {
+    // Ensure any open dialogs like "Play Again?" are closed.
+    dismissConfirmationDialog();
 
-    // // This is the code for a clean, empty scoreboard.
-    // scoreData = [];
-    // for (let i = 0; i < 10; i++) {
-    //     scoreData.push({
-    //         rolls: i < 9 ? ['', ''] : ['', '', ''],
-    //         frameScore: ''
-    //     });
-    // }
+    // This is the code for a clean, empty scoreboard.
+    scoreData = [];
+    for (let i = 0; i < 10; i++) {
+        scoreData.push({
+            rolls: i < 9 ? ['', ''] : ['', '', ''],
+            frameScore: ''
+        });
+    }
     currentFrame = 0;
     currentRoll = 0;
     isGameOver = false;
+    pinsDownLastRoll = 0;
+
+    // We need to make sure pins are reset when a new scoring game starts
+    if (world) { // Check if physics world is ready
+        resetPins();
+    }
+
     drawScoreboard();
+}
+
+function calculateScores() {
+    let cumulativeScore = 0;
+
+    // Helper to get the numeric value of a single roll
+    const getRollValue = (frame, roll) => {
+        const rollStr = scoreData[frame].rolls[roll];
+        if (rollStr === '') return null;
+        if (rollStr === 'X') return 10;
+        // For a spare, its value is 10 minus the previous roll in that frame.
+        if (rollStr === '/') return 10 - parseInt(scoreData[frame].rolls[roll - 1]);
+        return parseInt(rollStr);
+    };
+
+    // --- Frames 1-9 ---
+    for (let i = 0; i < 9; i++) {
+        if (scoreData[i].rolls[0] === '') {
+            scoreData[i].frameScore = '';
+            continue;
+        }
+
+        let frameScore = 0;
+        const isStrike = scoreData[i].rolls[0] === 'X';
+        const isSpare = scoreData[i].rolls[1] === '/';
+
+        if (isStrike) {
+            const nextRoll = getRollValue(i + 1, 0);
+            let secondNextRoll;
+            if (nextRoll === 10) { // Followed by another strike
+                // Look ahead to the frame after that, or the 2nd roll of the 10th frame
+                secondNextRoll = (i < 8) ? getRollValue(i + 2, 0) : getRollValue(9, 1);
+            } else { // Not a double
+                secondNextRoll = getRollValue(i + 1, 1);
+            }
+
+            if (nextRoll === null || secondNextRoll === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = 10 + nextRoll + secondNextRoll;
+
+        } else if (isSpare) {
+            const nextRoll = getRollValue(i + 1, 0);
+            if (nextRoll === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = 10 + nextRoll;
+
+        } else { // Open frame
+            const roll1 = getRollValue(i, 0);
+            const roll2 = getRollValue(i, 1);
+            if (roll1 === null || roll2 === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = roll1 + roll2;
+        }
+
+        cumulativeScore += frameScore;
+        scoreData[i].frameScore = cumulativeScore.toString();
+    }
+
+    // --- Frame 10 ---
+    const frame10 = scoreData[9];
+    if (frame10.rolls[0] !== '') {
+        const roll1Val = getRollValue(9, 0);
+        if (roll1Val === null) {
+            frame10.frameScore = '';
+            return;
+        }
+
+        const roll2Val = getRollValue(9, 1);
+        if (roll2Val === null) {
+            frame10.frameScore = '';
+            return;
+        }
+
+        let frameScore = 0;
+        const isStrike = roll1Val === 10;
+        const isSpare = !isStrike && (roll1Val + roll2Val === 10);
+
+        if (isStrike || isSpare) {
+            const roll3Val = getRollValue(9, 2);
+            if (roll3Val !== null) {
+                frameScore = roll1Val + roll2Val + roll3Val;
+                cumulativeScore += frameScore;
+                frame10.frameScore = cumulativeScore.toString();
+            } else {
+                frame10.frameScore = ''; // Waiting for third roll
+            }
+        } else {
+            // Open 10th frame, no third roll
+            frameScore = roll1Val + roll2Val;
+            cumulativeScore += frameScore;
+            frame10.frameScore = cumulativeScore.toString();
+        }
+    } else {
+        frame10.frameScore = '';
+    }
+}
+
+function processStandardFrameRoll(fallenPins, fallenThisRoll) {
+    if (currentRoll === 0) { // First roll
+        if (fallenPins.length === 10) { // Strike
+            scoreData[currentFrame].rolls[0] = 'X';
+            currentFrame++;
+            pinsDownLastRoll = 0;
+            resetPins();
+        } else {
+            scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
+            pinsDownLastRoll = fallenPins.length;
+            currentRoll++;
+            clearFallenPins();
+        }
+    } else { // Second roll
+        if (fallenPins.length === 10) { // Spare
+            scoreData[currentFrame].rolls[1] = '/';
+        } else {
+            scoreData[currentFrame].rolls[1] = fallenThisRoll.toString();
+        }
+        currentFrame++;
+        currentRoll = 0;
+        pinsDownLastRoll = 0;
+        resetPins();
+    }
+}
+
+function processTenthFrameRoll(fallenPins, fallenThisRoll) {
+    const frame = scoreData[9];
+
+    if (currentRoll === 0) { // First roll
+        frame.rolls[0] = fallenThisRoll === 10 ? 'X' : fallenThisRoll.toString();
+        if (fallenThisRoll === 10) { // Strike
+            resetPins();
+            pinsDownLastRoll = 0;
+        } else {
+            clearFallenPins();
+            pinsDownLastRoll = fallenPins.length;
+        }
+        currentRoll++;
+    } else if (currentRoll === 1) { // Second roll
+        const firstRollWasStrike = frame.rolls[0] === 'X';
+
+        if (firstRollWasStrike) {
+            // This is the first bonus ball after a strike. Rack was full.
+            const pinsThisThrow = fallenPins.length;
+            frame.rolls[1] = pinsThisThrow === 10 ? 'X' : pinsThisThrow.toString();
+            if (pinsThisThrow === 10) { // Second strike
+                resetPins();
+                pinsDownLastRoll = 0;
+            } else {
+                clearFallenPins();
+                pinsDownLastRoll = fallenPins.length;
+            }
+        } else {
+            // This is the second ball of a standard frame.
+            if (fallenPins.length === 10) { // Spare
+                frame.rolls[1] = '/';
+                resetPins(); // Reset for bonus ball
+                pinsDownLastRoll = 0;
+            } else { // Open frame
+                frame.rolls[1] = fallenThisRoll.toString();
+                isGameOver = true; // Game over, no third roll
+            }
+        }
+        // If we're not game over, we advance to the third roll
+        if (!isGameOver) {
+            currentRoll++;
+        }
+    } else if (currentRoll === 2) { // Third roll (bonus ball)
+        const firstRollWasStrike = frame.rolls[0] === 'X';
+        const secondRollWasStrike = frame.rolls[1] === 'X';
+
+        if (firstRollWasStrike && secondRollWasStrike) {
+            // Third strike in a row. Rack was full.
+            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
+        } else if (firstRollWasStrike) {
+            // First was strike, second was not. Partial rack.
+            frame.rolls[2] = fallenPins.length === 10 ? '/' : fallenThisRoll.toString();
+        } else {
+            // First was not strike, second was a spare. Rack is full.
+            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
+        }
+        isGameOver = true;
+    }
+}
+
+function processRoll() {
+    if (isGameOver) return;
+
+    const fallenPins = getFallenPins();
+    const fallenThisRoll = fallenPins.length - pinsDownLastRoll;
+
+    if (currentFrame === 9) {
+        processTenthFrameRoll(fallenPins, fallenThisRoll);
+    } else {
+        processStandardFrameRoll(fallenPins, fallenThisRoll);
+    }
+
+    calculateScores();
+    drawScoreboard();
+
+    if (isGameOver) {
+        activeConfirmationDialog = createConfirmationDialog(
+            'Game Over! Play Again?',
+            [
+                { text: 'No', action: 'dismiss' },
+                { text: 'Yes', action: 'startNewGame' }
+            ],
+            renderer
+        );
+        scene.add(activeConfirmationDialog);
+    }
 }
 
 function createPinHUD() {
@@ -337,10 +533,11 @@ function drawPinHUD() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+
     pinLayout.forEach((pos, index) => {
         let isStanding = false;
-        // Find the specific pin for this layout position directly from the main array
-        const pin = dynamicObjects.find(p => p.isPin && p.pinId === index);
+        const pin = pins.find(p => p.pinId === index); // Find pin by its unique ID
         if (pin) {
             const up = new THREE.Vector3(0, 1, 0);
             const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
@@ -531,10 +728,28 @@ function animate(timestamp, frame) {
 
             if (fallenPins.length === pins.length && !allPinsFallen) {
                 allPinsFallen = true;
-                pinsFallenResetTimer = setTimeout(() => {
-                    resetPins();
-                    pinsFallenResetTimer = null;
-                }, 4000);
+                // In scoring mode, roll completion handles reset. In freeplay, use a timer.
+                if (gameMode === 'freeplay') {
+                    pinsFallenResetTimer = setTimeout(() => {
+                        resetPins();
+                        pinsFallenResetTimer = null;
+                    }, 4000);
+                }
+            }
+        }
+
+        // --- SCORING LOGIC: Roll Completion Detection ---
+        if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                const isSleeping = ball.body.isSleeping();
+                const ballLocation = getBallLocationState();
+                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+
+                if (isSleeping || isOutOfPlay) {
+                    isBallThrown = false; // Prevent this from running again until next throw
+                    processRoll();
+                }
             }
         }
 
@@ -595,14 +810,18 @@ function animate(timestamp, frame) {
 
                             switch (action) {
                                 case 'dismiss':
-                                    dismissConfirmationDialog();
+                                    activeConfirmationDialog.userData.dismiss();
                                     break;
                                 case 'exit':
                                     renderer.xr.getSession().end();
                                     break;
                                 case 'reset':
                                     resetPins();
-                                    dismissConfirmationDialog();
+                                    activeConfirmationDialog.userData.dismiss();
+                                    break;
+                                case 'startNewGame':
+                                    startNewGame();
+                                    activeConfirmationDialog.userData.dismiss();
                                     break;
                             }
                         }
@@ -610,7 +829,7 @@ function animate(timestamp, frame) {
                         // Cancel with B/Y
                         if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                             endSessionButtonState[i] = true;
-                            dismissConfirmationDialog();
+                            activeConfirmationDialog.userData.dismiss();
                         }
                     }
 
@@ -624,16 +843,14 @@ function animate(timestamp, frame) {
                             const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
                             if (oldIndex !== selectedMenuIndex) {
-                                updateButtonAppearance(buttons[oldIndex], false, false);
-                                updateButtonAppearance(buttons[selectedMenuIndex], false, true);
+                                optionsMenu.userData.update();
                             }
                         } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
                             thumbstickYState[i] = 1;
                             const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
                             if (oldIndex !== selectedMenuIndex) {
-                                updateButtonAppearance(buttons[oldIndex], false, false);
-                                updateButtonAppearance(buttons[selectedMenuIndex], false, true);
+                                optionsMenu.userData.update();
                             }
                         } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
                             thumbstickYState[i] = 0;
@@ -766,10 +983,7 @@ function animate(timestamp, frame) {
                                 // Find index of current game mode and set it as selected
                                 const currentModeIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
                                 selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
-
-                                optionsMenu.userData.buttons.forEach((button, index) => {
-                                    updateButtonAppearance(button, false, index === selectedMenuIndex);
-                                });
+                                optionsMenu.userData.update();
 
                                 const cameraPosition = new THREE.Vector3();
                                 camera.getWorldPosition(cameraPosition);
@@ -958,6 +1172,12 @@ function createPins(fY) {
 }
 
 function clearFallenPins() {
+    // This function correctly removes fallen pins from the simulation.
+    // 1. It gets a list of fallen pins.
+    // 2. It removes the visual mesh from the Three.js scene.
+    // 3. It removes the physics body from the Rapier world.
+    // 4. It filters the pin object out of the master dynamicObjects array,
+    //    ensuring it's gone from all future physics steps and lookups.
     const fallenPins = getFallenPins();
     if (fallenPins.length > 0) {
         for (const pin of fallenPins) {
@@ -988,6 +1208,8 @@ function getFallenPins() {
 }
 
 function resetPins() {
+    // The confirmation dialog is dismissed by the input handler that calls this.
+    // No need to dismiss it here.
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
@@ -1134,12 +1356,6 @@ function createConfirmationDialog(title, buttons, renderer) {
     return dialog;
 }
 
-function dismissConfirmationDialog() {
-    if (activeConfirmationDialog) {
-        activeConfirmationDialog.userData.dismiss();
-    }
-}
-
 function updateFloorAndLanePosition(yDelta = 0) {
     if (laneObject) {
         const newPos = laneObject.mesh.position.clone();
@@ -1182,7 +1398,9 @@ function setLanePosition(position) {
 
 function cleanupScene() {
     // Dismiss any active UI
-    dismissExitConfirmation();
+    if (activeConfirmationDialog) {
+        activeConfirmationDialog.userData.dismiss();
+    }
 
     // Clear any pending timers
     if (pinsFallenResetTimer) {
@@ -1282,6 +1500,7 @@ async function init() {
 
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
+                isBallThrown = true;
             }
             holdingController = null;
         }
