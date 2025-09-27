@@ -51,6 +51,7 @@ let optionsMenu = null;
 let menuButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
@@ -102,6 +103,7 @@ function createOptionsMenu() {
         const material = new THREE.MeshBasicMaterial({ map: texture });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.y = yPos;
+        mesh.position.z = 0.01; // Add a small offset to prevent Z-fighting
         mesh.name = `button_${mode}`;
         mesh.userData.mode = mode; // Store the mode for identification
         mesh.userData.isButton = true;
@@ -127,6 +129,53 @@ function createOptionsMenu() {
     menu.visible = false; // Initially hidden
     scene.add(menu);
     return menu;
+}
+
+function createDebugDisplay() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(0.8, 0.4);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const displayMesh = new THREE.Mesh(geometry, material);
+    displayMesh.userData.canvas = canvas;
+    displayMesh.userData.context = context;
+
+    scene.add(displayMesh);
+    return displayMesh;
+}
+
+function updateDebugDisplay(gamepad) {
+    if (!debugDisplay || !gamepad) return;
+
+    const context = debugDisplay.userData.context;
+    const canvas = debugDisplay.userData.canvas;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.font = '20px sans-serif';
+
+    gamepad.buttons.forEach((button, index) => {
+        const x = 20 + (index % 6) * 80;
+        const y = 40 + Math.floor(index / 6) * 100;
+
+        // Draw button state indicator
+        context.fillStyle = button.pressed ? 'green' : 'red';
+        context.fillRect(x, y, 50, 50);
+
+        // Draw button index label
+        context.fillStyle = 'white';
+        context.textAlign = 'center';
+        context.fillText(index, x + 25, y + 80);
+    });
+
+    debugDisplay.material.map.needsUpdate = true;
 }
 
 async function main() {
@@ -344,6 +393,11 @@ function animate(timestamp, frame) {
                 // Also dismiss on trigger press (index 0)
                 if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
                     dismissExitConfirmation();
+                }
+
+                // Update debug display for the left controller
+                if (i === 0) {
+                    updateDebugDisplay(controller.gamepad);
                 }
 
                 // Handle options menu toggle (left controller, assuming options button is 3 for now)
@@ -761,6 +815,10 @@ async function init() {
     scene.add(directionalLight);
 
     optionsMenu = createOptionsMenu();
+    debugDisplay = createDebugDisplay();
+    debugDisplay.position.set(0, 0.4, -1.5); // Position it in the upper part of the view
+    camera.add(debugDisplay);
+
     placementMatrix = new THREE.Matrix4();
     
     renderer.setAnimationLoop(animate);
