@@ -51,6 +51,11 @@ let optionsMenu = null;
 let menuButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let scoreboard = null;
+let scoreData = [];
+let currentFrame = 0;
+let currentRoll = 0;
+let isGameOver = false;
 let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
@@ -131,6 +136,147 @@ function createOptionsMenu() {
     return menu;
 }
 
+function updateGameModeUI() {
+    if (gameMode === 'scoring') {
+        if (scoreboard) {
+            // Position the scoreboard above the lane
+            if (laneObject) {
+                const lanePosition = laneObject.mesh.position;
+                scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+            }
+            scoreboard.visible = true;
+            resetScoreboard(); // Load placeholder data and draw
+        }
+    } else { // 'freeplay'
+        if (scoreboard) {
+            scoreboard.visible = false;
+        }
+    }
+}
+
+function createScoreboard() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2048; // High res for sharp text
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(2.5, 0.3); // A wide banner
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const boardMesh = new THREE.Mesh(geometry, material);
+    boardMesh.name = "scoreboard";
+    boardMesh.userData.canvas = canvas;
+    boardMesh.userData.context = context;
+
+    boardMesh.visible = false; // Initially hidden
+    scene.add(boardMesh);
+
+    return boardMesh;
+}
+
+function drawScoreboard() {
+    if (!scoreboard) return;
+
+    const ctx = scoreboard.userData.context;
+    const canvas = scoreboard.userData.canvas;
+
+    // Clear canvas with a dark blue background
+    ctx.fillStyle = '#000033';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Define layout constants
+    const frameWidth = (canvas.width - 40) / 11; // 10 frames + 1 total box
+    const frameHeight = canvas.height - 40;
+    const startX = 20;
+    const startY = 20;
+    const smallBoxSize = frameWidth / 3.5;
+
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.fillStyle = 'white';
+
+    // Draw the 10 frames + total box
+    for (let i = 0; i < 11; i++) {
+        const x = startX + i * frameWidth;
+
+        if (i < 10) { // Frames 1-10
+            // Main frame box
+            ctx.strokeRect(x, startY, frameWidth, frameHeight);
+
+            // Line for cumulative score
+            ctx.beginPath();
+            ctx.moveTo(x, startY + smallBoxSize);
+            ctx.lineTo(x + frameWidth, startY + smallBoxSize);
+            ctx.stroke();
+
+            // Cumulative score text
+            ctx.font = '60px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(scoreData[i].cumulativeScore, x + frameWidth / 2, startY + smallBoxSize + (frameHeight - smallBoxSize) / 2);
+
+            if (i < 9) { // Frames 1-9 have 2 roll boxes
+                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
+
+                ctx.font = '30px sans-serif';
+                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
+
+            } else { // 10th Frame has 3 roll boxes
+                ctx.strokeRect(x + frameWidth - 3 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
+
+                ctx.font = '30px sans-serif';
+                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (2.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[2], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
+            }
+        } else { // Final "Total" box
+            ctx.strokeRect(x, startY, frameWidth, frameHeight);
+            const totalScore = scoreData.length > 0 ? scoreData[9].cumulativeScore : '';
+            ctx.font = '60px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(totalScore, x + frameWidth / 2, startY + frameHeight / 2);
+        }
+    }
+
+    scoreboard.material.map.needsUpdate = true;
+}
+
+function resetScoreboard() {
+    // This is placeholder data to test the display logic.
+    // The actual score calculation will be implemented later.
+    scoreData = [
+        { rolls: ['7', '2'], cumulativeScore: '9' },
+        { rolls: ['9', '/'], cumulativeScore: '29' },
+        { rolls: ['X', ''], cumulativeScore: '48' },
+        { rolls: ['8', '1'], cumulativeScore: '57' },
+        { rolls: ['X', ''], cumulativeScore: '77' },
+        { rolls: ['X', ''], cumulativeScore: '97' },
+        { rolls: ['X', ''], cumulativeScore: '126' },
+        { rolls: ['9', '0'], cumulativeScore: '135' },
+        { rolls: ['8', '/'], cumulativeScore: '155' },
+        { rolls: ['X', 'X', 'X'], cumulativeScore: '185' }
+    ];
+
+    // // This is the code for a clean, empty scoreboard.
+    // scoreData = [];
+    // for (let i = 0; i < 10; i++) {
+    //     scoreData.push({
+    //         rolls: i < 9 ? ['', ''] : ['', '', ''], // 10th frame has 3 rolls
+    //         cumulativeScore: ''
+    //     });
+    // }
+    currentFrame = 0;
+    currentRoll = 0;
+    isGameOver = false;
+    drawScoreboard();
+}
+
 function createDebugDisplay() {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
@@ -204,20 +350,21 @@ async function main() {
                 clearInterval(checkFloor);
                 fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
+                updateGameModeUI();
 
-                // Position and show the debug display once the world is set up
-                if (debugDisplay) {
-                    const cameraPosition = new THREE.Vector3();
-                    camera.getWorldPosition(cameraPosition);
-                    const cameraQuaternion = new THREE.Quaternion();
-                    camera.getWorldQuaternion(cameraQuaternion);
-                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                // // Position and show the debug display once the world is set up
+                // if (debugDisplay) {
+                //     const cameraPosition = new THREE.Vector3();
+                //     camera.getWorldPosition(cameraPosition);
+                //     const cameraQuaternion = new THREE.Quaternion();
+                //     camera.getWorldQuaternion(cameraQuaternion);
+                //     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
 
-                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                    debugDisplay.position.y += 0.5; // Place it a bit higher
-                    debugDisplay.quaternion.copy(cameraQuaternion);
-                    debugDisplay.visible = true;
-                }
+                //     debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                //     debugDisplay.position.y += 0.5; // Place it a bit higher
+                //     debugDisplay.quaternion.copy(cameraQuaternion);
+                //     debugDisplay.visible = true;
+                // }
             }
         }, 150);
     });
@@ -407,19 +554,30 @@ function animate(timestamp, frame) {
                     dismissExitConfirmation();
                 }
 
-                // Update debug display for the left controller
-                if (i === 0) {
-                    updateDebugDisplay(controller.gamepad);
-                }
+                // // Update debug display for the left controller
+                // if (i === 0) {
+                //     updateDebugDisplay(controller.gamepad);
+                // }
 
-                // Handle options menu toggle (left controller, assuming options button is 3 for now)
+                // Handle options menu toggle (left controller, options button is 12)
                 if (i === 0) { // Left controller
-                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !menuButtonState) {
+                    if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
-                            optionsMenu.visible = !optionsMenu.visible;
+                            // If menu is currently visible, it's about to be hidden. Save the state.
                             if (optionsMenu.visible) {
-                                // Position the menu in the world in front of the user
+                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
+                                if (selectedButton) {
+                                    gameMode = selectedButton.userData.mode;
+                                    localStorage.setItem('gameMode', gameMode);
+                                    updateGameModeUI();
+                                }
+                            }
+
+                            optionsMenu.visible = !optionsMenu.visible;
+
+                            // If it was just made visible, position it.
+                            if (optionsMenu.visible) {
                                 const cameraPosition = new THREE.Vector3();
                                 camera.getWorldPosition(cameraPosition);
                                 const cameraQuaternion = new THREE.Quaternion();
@@ -429,7 +587,7 @@ function animate(timestamp, frame) {
                                 optionsMenu.quaternion.copy(cameraQuaternion);
                             }
                         }
-                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                    } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
                         menuButtonState = false;
                     }
                 }
@@ -467,6 +625,7 @@ function animate(timestamp, frame) {
                             gameMode = selectedButton.userData.mode;
                             localStorage.setItem('gameMode', gameMode);
                             optionsMenu.visible = false;
+                            updateGameModeUI();
                         }
                     } else if (!controller.gamepad.buttons[0].pressed) {
                         triggerState[i] = false;
@@ -827,9 +986,10 @@ async function init() {
     scene.add(directionalLight);
 
     optionsMenu = createOptionsMenu();
-    debugDisplay = createDebugDisplay();
-    scene.add(debugDisplay);
-    debugDisplay.visible = false; // Initially hidden
+    scoreboard = createScoreboard();
+    // debugDisplay = createDebugDisplay();
+    // scene.add(debugDisplay);
+    // debugDisplay.visible = false; // Initially hidden
 
     placementMatrix = new THREE.Matrix4();
     
