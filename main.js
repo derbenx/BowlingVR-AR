@@ -56,6 +56,73 @@ let controllerWantsToHold = null;
 let visdb=0;//debug stuff
 let laneCollisionVisualizer = null;
 
+function updateButtonAppearance(button, hovered) {
+    if (!button) return;
+    const context = button.userData.context;
+    const canvas = button.userData.canvas;
+    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+
+    // Button style
+    context.fillStyle = hovered ? '#666' : '#444'; // Highlight color
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = hovered ? '#FFF' : '#888'; // Highlight border
+    context.lineWidth = 10;
+    context.strokeRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = 'white';
+    context.font = 'bold 40px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    button.material.map.needsUpdate = true;
+}
+
+function createOptionsMenu() {
+    const menu = new THREE.Group();
+    menu.name = "optionsMenu";
+
+    // Create background panel
+    const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    menu.add(panel);
+
+    // Function to create a button with text
+    function createButton(text, yPos, mode) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.5, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.y = yPos;
+        mesh.name = `button_${mode}`;
+        mesh.userData.mode = mode; // Store the mode for identification
+        mesh.userData.isButton = true;
+        mesh.userData.canvas = canvas;
+        mesh.userData.context = context;
+
+        updateButtonAppearance(mesh, false); // Initial draw
+
+        return mesh;
+    }
+
+    // Create buttons
+    const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
+    const scoringButton = createButton('Scoring', -0.1, 'scoring');
+
+    menu.add(freePlayButton);
+    menu.add(scoringButton);
+
+    menu.visible = false; // Initially hidden
+    scene.add(menu);
+    return menu;
+}
+
 async function main() {
     await RAPIER.init();
 
