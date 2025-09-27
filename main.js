@@ -47,12 +47,16 @@ let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
+let resetConfirmationActive = false;
+let resetConfirmationDialog = null;
+let selectedResetIndex = 1; // 0 for Yes, 1 for No
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
@@ -70,12 +74,12 @@ function updateButtonAppearance(button, hovered) {
     if (!button) return;
     const context = button.userData.context;
     const canvas = button.userData.canvas;
-    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+    const text = button.userData.text;
 
     // Button style
     context.fillStyle = hovered ? '#666' : '#444'; // Highlight color
     context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = hovered ? '#FFF' : '#888'; // Highlight border
+    context.strokeStyle = hovered ? 'lime' : '#888'; // Use green for the 'hovered'/selected state
     context.lineWidth = 10;
     context.strokeRect(0, 0, canvas.width, canvas.height);
 
@@ -125,7 +129,9 @@ function createOptionsMenu() {
 
     // Create buttons
     const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
+    freePlayButton.userData.text = 'Free Play';
     const scoringButton = createButton('Scoring', -0.1, 'scoring');
+    scoringButton.userData.text = 'Scoring';
 
     menu.add(freePlayButton);
     menu.add(scoringButton);
@@ -137,6 +143,69 @@ function createOptionsMenu() {
     menu.visible = false; // Initially hidden
     scene.add(menu);
     return menu;
+}
+
+function createResetConfirmationDialog() {
+    const dialog = new THREE.Group();
+    dialog.name = "resetConfirmationDialog";
+    dialog.userData.buttons = [];
+
+    // Panel
+    const panelGeo = new THREE.PlaneGeometry(0.8, 0.4);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x333333, transparent: true, opacity: 0.9 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    dialog.add(panel);
+
+    // Title Text
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 128;
+    const context = canvas.getContext('2d');
+    context.fillStyle = 'white';
+    context.font = 'bold 40px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText('Reset Pins?', canvas.width / 2, canvas.height / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const titleGeo = new THREE.PlaneGeometry(0.7, 0.175);
+    const titleMat = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    const titleMesh = new THREE.Mesh(titleGeo, titleMat);
+    titleMesh.position.set(0, 0.1, 0.01);
+    dialog.add(titleMesh);
+
+    // Button Creation
+    function createButton(text, xPos, value) {
+        const btnCanvas = document.createElement('canvas');
+        btnCanvas.width = 256;
+        btnCanvas.height = 128;
+        const btnContext = btnCanvas.getContext('2d');
+
+        const btnTexture = new THREE.CanvasTexture(btnCanvas);
+        const geometry = new THREE.PlaneGeometry(0.3, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: btnTexture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.set(xPos, -0.1, 0.01);
+        mesh.userData.text = text;
+        mesh.userData.value = value;
+        mesh.userData.isButton = true;
+        mesh.userData.canvas = btnCanvas;
+        mesh.userData.context = btnContext;
+        updateButtonAppearance(mesh, false);
+        return mesh;
+    }
+
+    const yesButton = createButton('Yes', -0.2, 'yes');
+    const noButton = createButton('No', 0.2, 'no');
+
+    dialog.add(yesButton);
+    dialog.add(noButton);
+    dialog.userData.buttons.push(yesButton); // index 0
+    dialog.userData.buttons.push(noButton);  // index 1
+
+    dialog.visible = false;
+    scene.add(dialog);
+    return dialog;
 }
 
 function updateGameModeUI() {
@@ -549,51 +618,179 @@ function animate(timestamp, frame) {
             controller.userData.lastQuaternion.copy(currentQuaternion);
 
             if (controller && controller.gamepad) {
+                if (exitConfirmationActive || resetConfirmationActive || (optionsMenu && optionsMenu.visible)) {
+                    // --- DIALOGS ARE OPEN - DEDICATED INPUT LOGIC ---
 
-                // Handle floor height adjustment with grip and thumbstick
-                const ballLocation = getBallLocationState();
-                const canAdjust = ballLocation !== 'lane';
-
-                if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
-                    // On initial press, freeze the pins
-                    if (!gripButtonState[i]) {
-                        gripButtonState[i] = true;
-                        const pins = dynamicObjects.filter(obj => obj.isPin);
-                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
-                    }
-
-                    const thumbstickY = controller.gamepad.axes[3];
-                    if (Math.abs(thumbstickY) > 0.1) {
-                        const yDelta = thumbstickY * -0.01; // Adjust speed and direction
-                        floorOffset += yDelta;
-                        updateFloorAndLanePosition(yDelta);
-
-                        // Clear any existing timer
-                        if (floorOffsetSaveTimer) {
-                            clearTimeout(floorOffsetSaveTimer);
+                    if (exitConfirmationActive) {
+                        // Confirm exit with A/X (4) or Trigger (0)
+                        if ((controller.gamepad.buttons[4].pressed && !resetButtonState[i]) ||
+                            (controller.gamepad.buttons[0].pressed && !triggerState[i])) {
+                            resetButtonState[i] = controller.gamepad.buttons[4].pressed;
+                            triggerState[i] = controller.gamepad.buttons[0].pressed;
+                            dismissExitConfirmation();
+                            renderer.xr.getSession().end();
+                            return; // Exit animate loop early
                         }
 
-                        // Set a new timer to save after 2 minutes of inactivity
-                        floorOffsetSaveTimer = setTimeout(() => {
-                            localStorage.setItem('floorOffset', floorOffset);
-                            floorOffsetSaveTimer = null;
-                        }, 120000); // 2 minutes
-                    }
-                } else if (gripButtonState[i]) {
-                    // On release, unfreeze the pins
-                    gripButtonState[i] = false;
-                    const pins = dynamicObjects.filter(obj => obj.isPin);
-                    pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
-                }
+                        // Cancel exit with B/Y (5)
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            dismissExitConfirmation();
+                        }
+                    } else if (resetConfirmationActive) {
+                        const buttons = resetConfirmationDialog.userData.buttons;
+                        const thumbstickX = controller.gamepad.axes[2]; // Horizontal axis
 
-                // Handle B/Y button (index 5) for exiting
-                if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
-                    endSessionButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        // Second press: dismiss the UI first, then end the session
-                        dismissExitConfirmation();
-                        renderer.xr.getSession().end();
-                    } else {
+                        // --- Navigation (Left/Right) ---
+                        if (thumbstickX < -0.5 && thumbstickXState[i] !== -1) { // Left
+                            thumbstickXState[i] = -1;
+                            if (selectedResetIndex !== 0) {
+                                updateButtonAppearance(buttons[1], false); // Deselect No
+                                updateButtonAppearance(buttons[0], true);  // Select Yes
+                                selectedResetIndex = 0;
+                            }
+                        } else if (thumbstickX > 0.5 && thumbstickXState[i] !== 1) { // Right
+                            thumbstickXState[i] = 1;
+                            if (selectedResetIndex !== 1) {
+                                updateButtonAppearance(buttons[0], false); // Deselect Yes
+                                updateButtonAppearance(buttons[1], true);  // Select No
+                                selectedResetIndex = 1;
+                            }
+                        }
+
+                        // --- Confirmation (A/X or Trigger) ---
+                        if ((controller.gamepad.buttons[4].pressed && !resetButtonState[i]) ||
+                            (controller.gamepad.buttons[0].pressed && !triggerState[i])) {
+
+                            resetButtonState[i] = controller.gamepad.buttons[4].pressed;
+                            triggerState[i] = controller.gamepad.buttons[0].pressed;
+
+                            if (selectedResetIndex === 0) { // "Yes" is selected
+                                resetPins();
+                            }
+                            dismissResetConfirmation();
+                        }
+
+                        // --- Cancellation (B/Y) ---
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            dismissResetConfirmation();
+                        }
+                    } else if (optionsMenu && optionsMenu.visible) {
+                        const buttons = optionsMenu.userData.buttons;
+
+                        // Navigation with thumbsticks
+                        const thumbstickY = controller.gamepad.axes[3];
+                        if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
+                            thumbstickYState[i] = -1;
+                            const oldIndex = selectedMenuIndex;
+
+                            if (selectedMenuIndex <= 0) { // If at the top or unselected, wrap to the bottom
+                                selectedMenuIndex = buttons.length - 1;
+                            } else {
+                                selectedMenuIndex--;
+                            }
+
+                            if (oldIndex !== selectedMenuIndex) {
+                                if (buttons[oldIndex]) updateButtonAppearance(buttons[oldIndex], false);
+                                updateButtonAppearance(buttons[selectedMenuIndex], true);
+                            }
+                        } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
+                            thumbstickYState[i] = 1;
+                            const oldIndex = selectedMenuIndex;
+
+                            if (selectedMenuIndex === -1 || selectedMenuIndex === buttons.length - 1) { // If at the bottom or unselected, wrap to the top
+                                selectedMenuIndex = 0;
+                            } else {
+                                selectedMenuIndex++;
+                            }
+
+                            if (oldIndex !== selectedMenuIndex) {
+                                if (buttons[oldIndex]) updateButtonAppearance(buttons[oldIndex], false);
+                                updateButtonAppearance(buttons[selectedMenuIndex], true);
+                            }
+                        }
+
+                        // Confirm selection with A/X (4) or Trigger (0)
+                        if ((controller.gamepad.buttons[4].pressed && !resetButtonState[i]) ||
+                            (controller.gamepad.buttons[0].pressed && !triggerState[i])) {
+                            resetButtonState[i] = controller.gamepad.buttons[4].pressed;
+                            triggerState[i] = controller.gamepad.buttons[0].pressed;
+                            const selectedButton = buttons[selectedMenuIndex];
+                            if (selectedButton) {
+                                gameMode = selectedButton.userData.mode;
+                                localStorage.setItem('gameMode', gameMode);
+                                optionsMenu.visible = false;
+                                updateGameModeUI();
+                            }
+                        }
+
+                        // Cancel/close with B/Y (5)
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            optionsMenu.visible = false; // Just close, don't save
+                        }
+
+                        // Also close with menu button (12) on left controller
+                        if (i === 0 && controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
+                            menuButtonState = true;
+                            optionsMenu.visible = false; // Just close, don't save
+                        }
+                    }
+
+                    // Release button states if no action was taken
+                    if (!controller.gamepad.buttons[0].pressed) triggerState[i] = false;
+                    if (!controller.gamepad.buttons[4].pressed) resetButtonState[i] = false;
+                    if (!controller.gamepad.buttons[5].pressed) endSessionButtonState[i] = false;
+                    if (i === 0 && controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
+                        menuButtonState = false;
+                    }
+                    // Reset thumbstick states
+                    if (Math.abs(controller.gamepad.axes[2]) < 0.2) thumbstickXState[i] = 0;
+                    if (Math.abs(controller.gamepad.axes[3]) < 0.2) thumbstickYState[i] = 0;
+
+                } else {
+                    // --- NO DIALOGS ACTIVE - DEFAULT GAME CONTROLS ---
+
+                    // Handle floor height adjustment with grip and thumbstick
+                    const ballLocation = getBallLocationState();
+                    const canAdjust = ballLocation !== 'lane';
+
+                    if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
+                        // On initial press, freeze the pins
+                        if (!gripButtonState[i]) {
+                            gripButtonState[i] = true;
+                            const pins = dynamicObjects.filter(obj => obj.isPin);
+                            pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
+                        }
+
+                        const thumbstickY = controller.gamepad.axes[3];
+                        if (Math.abs(thumbstickY) > 0.1) {
+                            const yDelta = thumbstickY * -0.01; // Adjust speed and direction
+                            floorOffset += yDelta;
+                            updateFloorAndLanePosition(yDelta);
+
+                            // Clear any existing timer
+                            if (floorOffsetSaveTimer) {
+                                clearTimeout(floorOffsetSaveTimer);
+                            }
+
+                            // Set a new timer to save after 2 minutes of inactivity
+                            floorOffsetSaveTimer = setTimeout(() => {
+                                localStorage.setItem('floorOffset', floorOffset);
+                                floorOffsetSaveTimer = null;
+                            }, 120000); // 2 minutes
+                        }
+                    } else if (gripButtonState[i]) {
+                        // On release, unfreeze the pins
+                        gripButtonState[i] = false;
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
+                    }
+
+                    // Handle B/Y button (index 5) for exiting
+                    if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                        endSessionButtonState[i] = true; // Mark as pressed
                         // First press: show confirmation
                         exitConfirmationActive = true;
                         exitConfirmationMesh = createExitConfirmationMesh();
@@ -611,18 +808,31 @@ function animate(timestamp, frame) {
 
                         // Auto-dismiss after 5 seconds
                         exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
-                    }
-                } else if (!controller.gamepad.buttons[5].pressed) {
-                    endSessionButtonState[i] = false; // Mark as released
-                }
 
-                // Handle A/X button (index 4) for resetting pins or dismissing confirmation
-                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
-                    resetButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        dismissExitConfirmation();
-                    } else {
-                        resetPins();
+                    } else if (!controller.gamepad.buttons[5].pressed) {
+                        endSessionButtonState[i] = false; // Mark as released
+                    }
+
+                    // Handle A/X button (index 4) for resetting pins
+                    if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
+                        resetButtonState[i] = true; // Mark as pressed
+                        // Show the reset confirmation dialog instead of resetting directly
+                        resetConfirmationActive = true;
+                        resetConfirmationDialog.visible = true;
+
+                        // Default to "No"
+                        selectedResetIndex = 1;
+                        updateButtonAppearance(resetConfirmationDialog.userData.buttons[0], false); // Yes
+                        updateButtonAppearance(resetConfirmationDialog.userData.buttons[1], true);  // No
+
+                        // Position the dialog in front of the camera
+                        const cameraPosition = new THREE.Vector3();
+                        camera.getWorldPosition(cameraPosition);
+                        const cameraQuaternion = new THREE.Quaternion();
+                        camera.getWorldQuaternion(cameraQuaternion);
+                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                        resetConfirmationDialog.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                        resetConfirmationDialog.quaternion.copy(cameraQuaternion);
                     }
                 } else if (!controller.gamepad.buttons[4].pressed) {
                     resetButtonState[i] = false; // Mark as released
@@ -655,8 +865,17 @@ function animate(timestamp, frame) {
 
                             optionsMenu.visible = !optionsMenu.visible;
 
-                            // If it was just made visible, position it.
+                            // If it was just made visible, position it and set the selection.
                             if (optionsMenu.visible) {
+                                // Find the index of the currently active game mode and set it as selected.
+                                const currentIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
+                                selectedMenuIndex = currentIndex;
+
+                                // Update all buttons to reflect the current selection
+                                optionsMenu.userData.buttons.forEach((button, index) => {
+                                    updateButtonAppearance(button, index === selectedMenuIndex);
+                                });
+
                                 const cameraPosition = new THREE.Vector3();
                                 camera.getWorldPosition(cameraPosition);
                                 const cameraQuaternion = new THREE.Quaternion();
@@ -976,6 +1195,13 @@ function dismissExitConfirmation() {
     }
 }
 
+function dismissResetConfirmation() {
+    if (resetConfirmationDialog) {
+        resetConfirmationDialog.visible = false;
+    }
+    resetConfirmationActive = false;
+}
+
 
 function createExitConfirmationMesh() {
     const canvas = document.createElement('canvas');
@@ -1095,6 +1321,7 @@ async function init() {
     optionsMenu = createOptionsMenu();
     scoreboard = createScoreboard();
     pinHUD = createPinHUD();
+    resetConfirmationDialog = createResetConfirmationDialog();
     // debugDisplay = createDebugDisplay();
     // scene.add(debugDisplay);
     // debugDisplay.visible = false; // Initially hidden
