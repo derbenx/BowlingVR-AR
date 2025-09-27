@@ -425,7 +425,6 @@ async function main() {
                 clearInterval(checkFloor);
                 fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
-                updateGameModeUI();
 
                 // // Position and show the debug display once the world is set up
                 // if (debugDisplay) {
@@ -855,6 +854,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     });
 
     createPins(fY);
+    updateGameModeUI();
 }
 
 function createPins(fY) {
