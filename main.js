@@ -39,12 +39,17 @@ let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
+let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
 let floorOffsetSaveTimer = null;
+let optionsMenu = null;
+let menuButtonState = false;
+let raycaster;
+let hoveredButton = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
@@ -277,6 +282,58 @@ function animate(timestamp, frame) {
                 // Also dismiss on trigger press (index 0)
                 if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
                     dismissExitConfirmation();
+                }
+
+                // Handle options menu toggle (left controller, thumbstick press - button 3)
+                if (i === 0) { // Left controller
+                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !menuButtonState) {
+                        menuButtonState = true;
+                        if (optionsMenu) {
+                            optionsMenu.visible = !optionsMenu.visible;
+                            if (optionsMenu.visible) {
+                                const cameraPosition = new THREE.Vector3();
+                                camera.getWorldPosition(cameraPosition);
+                                const cameraQuaternion = new THREE.Quaternion();
+                                camera.getWorldQuaternion(cameraQuaternion);
+                                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                                optionsMenu.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                                optionsMenu.quaternion.copy(cameraQuaternion);
+                            }
+                        }
+                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                        menuButtonState = false;
+                    }
+                }
+
+                // Handle menu interaction (right controller)
+                if (i === 1 && optionsMenu && optionsMenu.visible) {
+                    const controller = renderer.xr.getController(1);
+                    const controllerGrip = renderer.xr.getControllerGrip(1);
+
+                    const controllerMatrix = controllerGrip.matrixWorld;
+                    const controllerPosition = new THREE.Vector3().setFromMatrixPosition(controllerMatrix);
+                    const controllerDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(new THREE.Matrix4().extractRotation(controllerMatrix));
+
+                    raycaster.set(controllerPosition, controllerDirection);
+                    const intersects = raycaster.intersectObjects(optionsMenu.children);
+
+                    const intersectedButton = intersects.find(intersect => intersect.object.userData.isButton)?.object;
+
+                    if (intersectedButton && intersectedButton !== hoveredButton) {
+                        updateButtonAppearance(hoveredButton, false); // Un-highlight old
+                        hoveredButton = intersectedButton;
+                        updateButtonAppearance(hoveredButton, true); // Highlight new
+                    } else if (!intersectedButton && hoveredButton) {
+                        updateButtonAppearance(hoveredButton, false);
+                        hoveredButton = null;
+                    }
+
+                    if (hoveredButton && controller.gamepad.buttons[0].pressed) { // Trigger press
+                        gameMode = hoveredButton.userData.mode;
+                        localStorage.setItem('gameMode', gameMode);
+                        optionsMenu.visible = false;
+                        console.log(`Game mode set to: ${gameMode}`);
+                    }
                 }
             }
         }
@@ -516,6 +573,7 @@ function dismissExitConfirmation() {
     }
 }
 
+
 function createExitConfirmationMesh() {
     const canvas = document.createElement('canvas');
     canvas.width = 512;
@@ -618,6 +676,8 @@ async function init() {
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
+    optionsMenu = createOptionsMenu();
+    raycaster = new THREE.Raycaster();
     placementMatrix = new THREE.Matrix4();
     
     renderer.setAnimationLoop(animate);
