@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<link rel="manifest" href="manifest.json" />
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AR Bowling</title>
@@ -8,8 +9,14 @@
         body { margin: 0; }
         canvas { display: block; }
     </style>
+        <script>
+ if (typeof navigator.serviceWorker !== 'undefined') {
+  navigator.serviceWorker.register('sw.js')
+ }
+    </script>
 </head>
 <body>
+
     <script type="importmap">
         {
             "imports": {
