@@ -47,6 +47,8 @@ let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
+let resetConfirmationActive = false;
+let resetConfirmationMesh = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
@@ -64,7 +66,7 @@ let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
-let showButtons = 1;
+let showButtons = 0;
 let laneCollisionVisualizer = null;
 
 function updateButtonAppearance(button, hovered, selected) {
@@ -423,32 +425,41 @@ async function main() {
     document.body.appendChild(arButton);
 
     renderer.xr.addEventListener('sessionstart', () => {
-        let fY = 0;
-        const checkFloor = setInterval(() => {
-            if (planes.children.length > 0) {
-                for (const planeMesh of planes.children) {
-                    fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-                }
-                clearInterval(checkFloor);
-                fY_floor = fY;
-                placeScene(fY, loader, world, dynamicObjects);
-                updateGameModeUI();
+        const setupScene = async () => {
+            let fY = 0;
+            // Wait for a plane to be detected
+            await new Promise(resolve => {
+                const checkFloor = setInterval(() => {
+                    if (planes.children.length > 0) {
+                        for (const planeMesh of planes.children) {
+                            fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+                        }
+                        clearInterval(checkFloor);
+                        resolve();
+                    }
+                }, 150);
+            });
 
-                // Position and show the debug display once the world is set up
-                if (showButtons && debugDisplay) {
-                    const cameraPosition = new THREE.Vector3();
-                    camera.getWorldPosition(cameraPosition);
-                    const cameraQuaternion = new THREE.Quaternion();
-                    camera.getWorldQuaternion(cameraQuaternion);
-                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+            fY_floor = fY;
+            await placeScene(fY, loader, world, dynamicObjects); // Await the async function
+            updateGameModeUI(); // Now this runs after placeScene is complete
 
-                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                    debugDisplay.position.y += 0.5; // Place it a bit higher
-                    debugDisplay.quaternion.copy(cameraQuaternion);
-                    debugDisplay.visible = true;
-                }
+            // Position and show the debug display once the world is set up
+            if (showButtons && debugDisplay) {
+                const cameraPosition = new THREE.Vector3();
+                camera.getWorldPosition(cameraPosition);
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldQuaternion(cameraQuaternion);
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                debugDisplay.position.y += 0.5; // Place it a bit higher
+                debugDisplay.quaternion.copy(cameraQuaternion);
+                debugDisplay.visible = true;
             }
-        }, 150);
+        };
+
+        setupScene();
     });
 
     renderer.xr.addEventListener('sessionend', cleanupScene);
@@ -556,7 +567,7 @@ function animate(timestamp, frame) {
             controller.userData.lastQuaternion.copy(currentQuaternion);
 
             if (controller && controller.gamepad) {
-                const dialogOpen = (optionsMenu && optionsMenu.visible) || exitConfirmationActive;
+                const dialogOpen = (optionsMenu && optionsMenu.visible) || exitConfirmationActive || resetConfirmationActive;
 
                 // --- DIALOG INPUT HANDLING ---
                 if (dialogOpen) {
@@ -625,6 +636,25 @@ function animate(timestamp, frame) {
                         }
                     }
 
+                    // --- Reset Confirmation Dialog ---
+                    if (resetConfirmationActive) {
+                        // Confirm with A/X/Trigger (buttons 0, 4)
+                        const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
+                        if (confirmButtonPressed) {
+                            if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
+                            if (controller.gamepad.buttons[4].pressed) resetButtonState[i] = true;
+
+                            resetPins();
+                            dismissResetConfirmation();
+                        }
+
+                        // Cancel with B/Y (button 5)
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            dismissResetConfirmation();
+                        }
+                    }
+
                     // Handle button release states for dialog controls
                     if (!controller.gamepad.buttons[0].pressed) triggerState[i] = false;
                     if (!controller.gamepad.buttons[4].pressed) resetButtonState[i] = false;
@@ -681,10 +711,23 @@ function animate(timestamp, frame) {
                         endSessionButtonState[i] = false;
                     }
 
-                    // Handle A/X button (index 4) for resetting pins
+                    // Handle A/X button (index 4) for initiating a reset
                     if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
                         resetButtonState[i] = true;
-                        resetPins();
+
+                        resetConfirmationActive = true;
+                        resetConfirmationMesh = createResetConfirmationMesh();
+
+                        const cameraPosition = new THREE.Vector3();
+                        camera.getWorldPosition(cameraPosition);
+                        const cameraQuaternion = new THREE.Quaternion();
+                        camera.getWorldQuaternion(cameraQuaternion);
+                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                        resetConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
+                        resetConfirmationMesh.quaternion.copy(cameraQuaternion);
+
+                        scene.add(resetConfirmationMesh);
+
                     } else if (!controller.gamepad.buttons[4].pressed) {
                         resetButtonState[i] = false;
                     }
@@ -1017,6 +1060,40 @@ function createExitConfirmationMesh() {
     const mesh = new THREE.Mesh(geometry, material);
 
     return mesh;
+}
+
+function createResetConfirmationMesh() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = 'white';
+    context.font = '30px sans-serif';
+    context.textAlign = 'center';
+    context.fillText('Reset the game?', canvas.width / 2, canvas.height / 2 - 30);
+    context.fillText('Confirm: A/X or Trigger', canvas.width / 2, canvas.height / 2 + 10);
+    context.fillText('Cancel: B/Y', canvas.width / 2, canvas.height / 2 + 40);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+
+    const geometry = new THREE.PlaneGeometry(1, 0.5);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+    const mesh = new THREE.Mesh(geometry, material);
+
+    return mesh;
+}
+
+function dismissResetConfirmation() {
+    if (resetConfirmationMesh) {
+        scene.remove(resetConfirmationMesh);
+        resetConfirmationMesh = null;
+    }
+    resetConfirmationActive = false;
 }
 
 function updateFloorAndLanePosition(yDelta = 0) {
