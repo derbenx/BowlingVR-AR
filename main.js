@@ -40,7 +40,7 @@ let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
-let gameMode = localStorage.getItem('gameMode') || 'freeplay';
+let gameMode = localStorage.getItem('gameMode') || 'practice';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
 let exitConfirmationActive = false;
@@ -50,7 +50,10 @@ let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = false;
+let resetConfirmationDialog = null;
 let selectedMenuIndex = 0;
+let resetDialogSelectionIndex = 0; // 0 for NO, 1 for YES
+let thumbstickXState = [0, 0]; // For left/right dialog navigation
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let scoreboard = null;
 let scoreData = [];
@@ -69,7 +72,7 @@ function updateButtonAppearance(button, hovered) {
     if (!button) return;
     const context = button.userData.context;
     const canvas = button.userData.canvas;
-    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+    const text = button.userData.mode === 'practice' ? 'Practice' : 'Scoring';
 
     // Button style
     context.fillStyle = hovered ? '#666' : '#444'; // Highlight color
@@ -123,14 +126,14 @@ function createOptionsMenu() {
     }
 
     // Create buttons
-    const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
+    const practiceButton = createButton('Practice', 0.1, 'practice');
     const scoringButton = createButton('Scoring', -0.1, 'scoring');
 
-    menu.add(freePlayButton);
+    menu.add(practiceButton);
     menu.add(scoringButton);
 
     // Add buttons to the dedicated array, ensuring correct order
-    menu.userData.buttons.push(freePlayButton); // index 0
+    menu.userData.buttons.push(practiceButton); // index 0
     menu.userData.buttons.push(scoringButton); // index 1
 
     menu.visible = false; // Initially hidden
@@ -349,6 +352,97 @@ function drawPinHUD() {
     });
 
     pinHUD.material.map.needsUpdate = true;
+}
+
+function updateResetButtonAppearance(button, hovered) {
+    if (!button) return;
+    const context = button.userData.context;
+    const canvas = button.userData.canvas;
+    const text = button.userData.label; // "YES" or "NO"
+
+    // Button style
+    context.fillStyle = hovered ? '#880000' : '#550000'; // Reddish theme for confirmation
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = hovered ? '#FFF' : '#888'; // Highlight border
+    context.lineWidth = 10;
+    context.strokeRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = 'white';
+    context.font = 'bold 40px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    button.material.map.needsUpdate = true;
+}
+
+function createResetConfirmationDialog() {
+    const dialog = new THREE.Group();
+    dialog.name = "resetConfirmationDialog";
+    dialog.userData.buttons = [];
+
+    // Create background panel
+    const panelGeo = new THREE.PlaneGeometry(0.8, 0.5);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x111122, transparent: true, opacity: 0.95 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    dialog.add(panel);
+
+    // Create question text
+    const qCanvas = document.createElement('canvas');
+    qCanvas.width = 1024;
+    qCanvas.height = 128;
+    const qContext = qCanvas.getContext('2d');
+    qContext.fillStyle = 'white';
+    qContext.font = 'bold 48px sans-serif';
+    qContext.textAlign = 'center';
+    qContext.textBaseline = 'middle';
+    qContext.fillText('Clear the current game?', qCanvas.width / 2, qCanvas.height / 2);
+
+    const qTexture = new THREE.CanvasTexture(qCanvas);
+    const qGeo = new THREE.PlaneGeometry(0.7, 0.1);
+    const qMat = new THREE.MeshBasicMaterial({ map: qTexture, transparent: true });
+    const qMesh = new THREE.Mesh(qGeo, qMat);
+    qMesh.position.y = 0.15;
+    dialog.add(qMesh);
+
+    // Button creation helper
+    function createButton(text, xPos, choice) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.25, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.x = xPos;
+        mesh.position.y = -0.1;
+        mesh.position.z = 0.01;
+
+        mesh.userData.choice = choice; // 'yes' or 'no'
+        mesh.userData.label = text;
+        mesh.userData.canvas = canvas;
+        mesh.userData.context = context;
+
+        updateResetButtonAppearance(mesh, false);
+
+        return mesh;
+    }
+
+    const noButton = createButton('NO', -0.2, 'no');
+    const yesButton = createButton('YES', 0.2, 'yes');
+
+    dialog.add(noButton);
+    dialog.add(yesButton);
+
+    dialog.userData.buttons.push(noButton);  // index 0
+    dialog.userData.buttons.push(yesButton); // index 1
+
+    dialog.visible = false;
+    scene.add(dialog);
+
+    return dialog;
 }
 
 function createDebugDisplay() {
@@ -620,7 +714,20 @@ function animate(timestamp, frame) {
                     resetButtonState[i] = true; // Mark as pressed
                     if (exitConfirmationActive) {
                         dismissExitConfirmation();
-                    } else {
+                    } else if (gameMode === 'scoring') {
+                        // In scoring mode, show confirmation dialog
+                        if (resetConfirmationDialog) {
+                            resetConfirmationDialog.visible = true;
+                            // Position it
+                            const cameraPosition = new THREE.Vector3();
+                            camera.getWorldPosition(cameraPosition);
+                            const cameraQuaternion = new THREE.Quaternion();
+                            camera.getWorldQuaternion(cameraQuaternion);
+                            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                            resetConfirmationDialog.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                            resetConfirmationDialog.quaternion.copy(cameraQuaternion);
+                        }
+                    } else { // In practice mode, reset directly
                         resetPins();
                     }
                 } else if (!controller.gamepad.buttons[4].pressed) {
@@ -727,6 +834,49 @@ function animate(timestamp, frame) {
                         }
                     } else if (!controller.gamepad.buttons[0].pressed) {
                         triggerState[i] = false;
+                    }
+                }
+
+                // Handle Reset Confirmation Dialog Interaction
+                if (resetConfirmationDialog && resetConfirmationDialog.visible) {
+                    const thumbstickX = controller.gamepad.axes[2]; // Horizontal axis
+
+                    // Navigate left/right
+                    if (thumbstickX < -0.5 && thumbstickXState[i] !== -1) { // Left
+                        thumbstickXState[i] = -1;
+                        if (resetDialogSelectionIndex === 1) { // if YES is selected, move to NO
+                            resetDialogSelectionIndex = 0;
+                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], false);
+                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], true);
+                        }
+                    } else if (thumbstickX > 0.5 && thumbstickXState[i] !== 1) { // Right
+                        thumbstickXState[i] = 1;
+                        if (resetDialogSelectionIndex === 0) { // if NO is selected, move to YES
+                            resetDialogSelectionIndex = 1;
+                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], false);
+                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], true);
+                        }
+                    } else if (Math.abs(thumbstickX) < 0.2) { // Neutral
+                        thumbstickXState[i] = 0;
+                    }
+
+                    // Confirm selection with A/X button (4) or trigger (0)
+                    const axPressed = controller.gamepad.buttons[4].pressed;
+                    const triggerPressed = controller.gamepad.buttons[0].pressed;
+
+                    if ((axPressed && !resetButtonState[i]) || (triggerPressed && !triggerState[i])) {
+                        if (resetDialogSelectionIndex === 1) { // "YES" is selected
+                            resetPins();
+                            resetScoreboard();
+                        }
+                        resetConfirmationDialog.visible = false;
+                        resetDialogSelectionIndex = 0; // Default to NO for next time
+                        updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], false);
+                        updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], false);
+
+                        // Prevent immediate re-trigger
+                        if (axPressed) resetButtonState[i] = true;
+                        if (triggerPressed) triggerState[i] = true;
                     }
                 }
             }
@@ -1086,6 +1236,7 @@ async function init() {
     optionsMenu = createOptionsMenu();
     scoreboard = createScoreboard();
     pinHUD = createPinHUD();
+    resetConfirmationDialog = createResetConfirmationDialog();
     // debugDisplay = createDebugDisplay();
     // scene.add(debugDisplay);
     // debugDisplay.visible = false; // Initially hidden
