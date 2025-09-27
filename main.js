@@ -38,6 +38,7 @@ let pinModel, pinVertices, fY_floor;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
+let gripButtonState = [false, false];
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
 let exitConfirmationActive = false;
@@ -195,7 +196,17 @@ function animate(timestamp, frame) {
             if (controller && controller.gamepad) {
 
                 // Handle floor height adjustment with grip and thumbstick
-                if (controller.gamepad.buttons[1].pressed) { // Grip button
+                const ballLocation = getBallLocationState();
+                const canAdjust = ballLocation !== 'lane';
+
+                if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
+                    // On initial press, freeze the pins
+                    if (!gripButtonState[i]) {
+                        gripButtonState[i] = true;
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
+                    }
+
                     const thumbstickY = controller.gamepad.axes[3];
                     if (Math.abs(thumbstickY) > 0.1) {
                         floorOffset += thumbstickY * -0.01; // Adjust speed and direction
@@ -212,6 +223,11 @@ function animate(timestamp, frame) {
                             floorOffsetSaveTimer = null;
                         }, 120000); // 2 minutes
                     }
+                } else if (gripButtonState[i]) {
+                    // On release, unfreeze the pins
+                    gripButtonState[i] = false;
+                    const pins = dynamicObjects.filter(obj => obj.isPin);
+                    pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
                 }
 
                 // Handle B/Y button (index 5) for exiting
@@ -454,6 +470,28 @@ function resetPins() {
     createPins(fY_floor + floorOffset);
 }
 
+function getBallLocationState() {
+    if (holdingController) {
+        return 'in-hand';
+    }
+
+    const ball = dynamicObjects.find(obj => obj.isBall);
+    if (!ball) {
+        return 'noball';
+    }
+
+    const position = ball.body.translation();
+    const adjustedFloorY = fY_floor + floorOffset;
+
+    if (position.y < adjustedFloorY + 0.1 && position.y > adjustedFloorY) {
+        return 'gutter';
+    } else if (position.y < adjustedFloorY) {
+        return 'ground';
+    } else {
+        return 'lane';
+    }
+}
+
 function dismissExitConfirmation() {
     if (exitConfirmationMesh) {
         scene.remove(exitConfirmationMesh);
@@ -579,17 +617,12 @@ async function init() {
             if (ball) {
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const position = ball.body.translation();
-                const adjustedFloorY = fY_floor + floorOffset;
+                const ballLocation = getBallLocationState();
+                console.log(ballLocation);
 
-                if (position.y < adjustedFloorY + .1 && position.y > adjustedFloorY) {console.log('gutter');}
-                else if (position.y < adjustedFloorY){console.log('ground');}
-                else {console.log('lane');}
+                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                const isBelowFloor = position.y < adjustedFloorY + .1;
-                //console.log(position.y, adjustedFloorY + .1);
-
-                if (!isMoving || isBelowFloor) {
+                if (!isMoving || isBelowLane) {
                     // If the ball is not moving or has fallen, clear the fallen pins
                     clearFallenPins();
 
