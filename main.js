@@ -209,8 +209,20 @@ function animate(timestamp, frame) {
 
                     const thumbstickY = controller.gamepad.axes[3];
                     if (Math.abs(thumbstickY) > 0.1) {
-                        floorOffset += thumbstickY * -0.01; // Adjust speed and direction
+                        const yDelta = thumbstickY * -0.01; // Adjust speed and direction
+                        floorOffset += yDelta;
                         updateFloorAndLanePosition();
+
+                        // Also move the kinematic pins by the same delta
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        pins.forEach(pin => {
+                            const currentPos = pin.body.translation();
+                            pin.body.setNextKinematicTranslation({
+                                x: currentPos.x,
+                                y: currentPos.y + yDelta,
+                                z: currentPos.z
+                            });
+                        });
 
                         // Clear any existing timer
                         if (floorOffsetSaveTimer) {
