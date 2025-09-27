@@ -31,6 +31,7 @@ const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
 let world, planes;
 let dynamicObjects = [];
+let allPins = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
@@ -330,21 +331,21 @@ function drawPinHUD() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-
     pinLayout.forEach((pos, index) => {
         let isStanding = false;
-        if (pins[index]) {
-            const pin = pins[index];
+        const pin = allPins[index]; // Use the persistent allPins array
+
+        // Check if the pin exists and has a body (i.e., it hasn't been cleared)
+        if (pin && pin.body) {
             const up = new THREE.Vector3(0, 1, 0);
             const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
             const pinUp = up.clone().applyQuaternion(quaternion);
-            isStanding = pinUp.y >= 0.5;
+            isStanding = pinUp.y >= 0.5; // Check if it's upright
         }
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = isStanding ? 'white' : '#555';
+        ctx.fillStyle = isStanding ? 'white' : '#555'; // White for standing, grey for fallen or cleared
         ctx.fill();
     });
 
@@ -864,7 +865,9 @@ function createPins(fY) {
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
+        const pinObject = { mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true };
+        dynamicObjects.push(pinObject);
+        allPins.push(pinObject);
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -887,6 +890,7 @@ function clearFallenPins() {
         for (const pin of fallenPins) {
             scene.remove(pin.mesh);
             world.removeRigidBody(pin.body);
+            pin.body = null; // Mark as inactive in the allPins list
         }
         // Filter out the removed pins from dynamicObjects
         dynamicObjects = dynamicObjects.filter(obj => !fallenPins.includes(obj));
@@ -895,17 +899,19 @@ function clearFallenPins() {
 
 function getFallenPins() {
     const fallenPins = [];
-    const pins = dynamicObjects.filter(obj => obj.isPin);
+    // Iterate over the persistent list of all pins
+    for (const pin of allPins) {
+        // Only check pins that are still physically in the world
+        if (pin.body) {
+            // Check orientation
+            const up = new THREE.Vector3(0, 1, 0);
+            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+            const pinUp = up.clone().applyQuaternion(quaternion);
+            const isTippedOver = pinUp.y < 0.5;
 
-    for (const pin of pins) {
-        // Check orientation
-        const up = new THREE.Vector3(0, 1, 0);
-        const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-        const pinUp = up.clone().applyQuaternion(quaternion);
-        const isTippedOver = pinUp.y < 0.5;
-
-        if (isTippedOver) {
-            fallenPins.push(pin);
+            if (isTippedOver) {
+                fallenPins.push(pin);
+            }
         }
     }
     return fallenPins;
@@ -928,6 +934,9 @@ function resetPins() {
 
     // Filter out the pins from dynamicObjects
     dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
+
+    // Clear the persistent list of all pins
+    allPins = [];
 
     // Create new pins
     createPins(fY_floor + floorOffset);
