@@ -35,18 +35,367 @@ let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
 let pinModel, pinVertices, fY_floor;
+let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
+let gripButtonState = [false, false];
+let triggerState = [false, false];
+let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
 let exitConfirmationActive = false;
 let exitConfirmationMesh = null;
 let exitConfirmationTimer = null;
+let floorOffsetSaveTimer = null;
+let optionsMenu = null;
+let menuButtonState = false;
+let hudButtonState = false;
+let selectedMenuIndex = 0;
+let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let scoreboard = null;
+let scoreData = [];
+let currentFrame = 0;
+let currentRoll = 0;
+let isGameOver = false;
+let pinHUD = null;
+let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
 let visdb=0;//debug stuff
 let laneCollisionVisualizer = null;
+
+function updateButtonAppearance(button, hovered) {
+    if (!button) return;
+    const context = button.userData.context;
+    const canvas = button.userData.canvas;
+    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+
+    // Button style
+    context.fillStyle = hovered ? '#666' : '#444'; // Highlight color
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = hovered ? '#FFF' : '#888'; // Highlight border
+    context.lineWidth = 10;
+    context.strokeRect(0, 0, canvas.width, canvas.height);
+
+    context.fillStyle = 'white';
+    context.font = 'bold 40px sans-serif';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(text, canvas.width / 2, canvas.height / 2);
+
+    button.material.map.needsUpdate = true;
+}
+
+function createOptionsMenu() {
+    const menu = new THREE.Group();
+    menu.name = "optionsMenu";
+    menu.userData.buttons = []; // Initialize a dedicated array for buttons
+
+    // Create background panel
+    const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    menu.add(panel);
+
+    // Function to create a button with text
+    function createButton(text, yPos, mode) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.5, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.y = yPos;
+        mesh.position.z = 0.01; // Add a small offset to prevent Z-fighting
+        mesh.name = `button_${mode}`;
+        mesh.userData.mode = mode; // Store the mode for identification
+        mesh.userData.isButton = true;
+        mesh.userData.canvas = canvas;
+        mesh.userData.context = context;
+
+        updateButtonAppearance(mesh, false); // Initial draw
+
+        return mesh;
+    }
+
+    // Create buttons
+    const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
+    const scoringButton = createButton('Scoring', -0.1, 'scoring');
+
+    menu.add(freePlayButton);
+    menu.add(scoringButton);
+
+    // Add buttons to the dedicated array, ensuring correct order
+    menu.userData.buttons.push(freePlayButton); // index 0
+    menu.userData.buttons.push(scoringButton); // index 1
+
+    menu.visible = false; // Initially hidden
+    scene.add(menu);
+    return menu;
+}
+
+function updateGameModeUI() {
+    if (gameMode === 'scoring') {
+        if (scoreboard) {
+            // Position the scoreboard above the lane
+            if (laneObject) {
+                const lanePosition = laneObject.mesh.position;
+                scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+            }
+            scoreboard.visible = true;
+            resetScoreboard(); // Load placeholder data and draw
+        }
+    } else { // 'freeplay'
+        if (scoreboard) {
+            scoreboard.visible = false;
+        }
+    }
+}
+
+function createScoreboard() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2048; // High res for sharp text
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(3.5, 0.42); // A larger, wide banner
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const boardMesh = new THREE.Mesh(geometry, material);
+    boardMesh.name = "scoreboard";
+    boardMesh.userData.canvas = canvas;
+    boardMesh.userData.context = context;
+
+    boardMesh.visible = false; // Initially hidden
+    scene.add(boardMesh);
+
+    return boardMesh;
+}
+
+function drawScoreboard() {
+    if (!scoreboard) return;
+
+    const ctx = scoreboard.userData.context;
+    const canvas = scoreboard.userData.canvas;
+
+    // Clear canvas with a dark blue background
+    ctx.fillStyle = '#000033';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Define layout constants
+    const frameWidth = (canvas.width - 40) / 11; // 10 frames + 1 total box
+    const frameHeight = canvas.height - 40;
+    const startX = 20;
+    const startY = 20;
+    const smallBoxSize = frameWidth / 3.5;
+
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 3;
+    ctx.fillStyle = 'white';
+
+    // Draw the 10 frames + total box
+    let cumulativeTotal = 0;
+    for (let i = 0; i < 11; i++) {
+        const x = startX + i * frameWidth;
+
+        if (i < 10) { // Frames 1-10
+            // Main frame box
+            ctx.strokeRect(x, startY, frameWidth, frameHeight);
+
+            // Line for frame score
+            ctx.beginPath();
+            ctx.moveTo(x, startY + smallBoxSize);
+            ctx.lineTo(x + frameWidth, startY + smallBoxSize);
+            ctx.stroke();
+
+            // Frame score text
+            const frameScore = scoreData[i].frameScore || '';
+            cumulativeTotal += parseInt(frameScore) || 0;
+            ctx.font = '60px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(frameScore, x + frameWidth / 2, startY + smallBoxSize + (frameHeight - smallBoxSize) / 2);
+
+            if (i < 9) { // Frames 1-9 have 2 roll boxes
+                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
+
+                ctx.font = '30px sans-serif';
+                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
+
+            } else { // 10th Frame has 3 roll boxes
+                ctx.strokeRect(x + frameWidth - 3 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
+                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
+
+                ctx.font = '30px sans-serif';
+                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (2.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
+                ctx.fillText(scoreData[i].rolls[2], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
+            }
+        } else { // Final "Total" box
+            ctx.strokeRect(x, startY, frameWidth, frameHeight);
+            const totalScore = cumulativeTotal.toString();
+            ctx.font = '60px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(totalScore, x + frameWidth / 2, startY + frameHeight / 2);
+        }
+    }
+
+    scoreboard.material.map.needsUpdate = true;
+}
+
+function resetScoreboard() {
+    // This is placeholder data to test the display logic.
+    scoreData = [
+        { rolls: ['7', '2'], frameScore: '9' },
+        { rolls: ['9', '/'], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '19' },
+        { rolls: ['8', '1'], frameScore: '9' },
+        { rolls: ['X', ''], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '29' },
+        { rolls: ['9', '0'], frameScore: '9' },
+        { rolls: ['8', '/'], frameScore: '20' },
+        { rolls: ['X', 'X', 'X'], frameScore: '30' }
+    ];
+
+    // // This is the code for a clean, empty scoreboard.
+    // scoreData = [];
+    // for (let i = 0; i < 10; i++) {
+    //     scoreData.push({
+    //         rolls: i < 9 ? ['', ''] : ['', '', ''],
+    //         frameScore: ''
+    //     });
+    // }
+    currentFrame = 0;
+    currentRoll = 0;
+    isGameOver = false;
+    drawScoreboard();
+}
+
+function createPinHUD() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(0.4, 0.4);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const hudMesh = new THREE.Mesh(geometry, material);
+    hudMesh.name = "pinHUD";
+    hudMesh.userData.canvas = canvas;
+    hudMesh.userData.context = context;
+
+    hudMesh.visible = false; // Initially hidden
+    scene.add(hudMesh);
+
+    return hudMesh;
+}
+
+function drawPinHUD() {
+    if (!pinHUD) return;
+
+    const ctx = pinHUD.userData.context;
+    const canvas = pinHUD.userData.canvas;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Pin positions in a standard bowling triangle layout
+    const pinLayout = [
+        { x: 128, y: 200 }, // Pin 1 (front)
+        { x: 108, y: 170 }, { x: 148, y: 170 }, // Row 2
+        { x: 88, y: 140 }, { x: 128, y: 140 }, { x: 168, y: 140 }, // Row 3
+        { x: 68, y: 110 }, { x: 108, y: 110 }, { x: 148, y: 110 }, { x: 188, y: 110 }, // Row 4
+    ];
+
+    // Draw triangle outline
+    ctx.beginPath();
+    ctx.moveTo(pinLayout[0].x, pinLayout[0].y + 20); // Bottom point
+    ctx.lineTo(pinLayout[6].x - 20, pinLayout[6].y - 20); // Top-left
+    ctx.lineTo(pinLayout[9].x + 20, pinLayout[9].y - 20); // Top-right
+    ctx.closePath();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+
+    pinLayout.forEach((pos, index) => {
+        let isStanding = false;
+        if (pins[index]) {
+            const pin = pins[index];
+            const up = new THREE.Vector3(0, 1, 0);
+            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+            const pinUp = up.clone().applyQuaternion(quaternion);
+            isStanding = pinUp.y >= 0.5;
+        }
+
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+        ctx.fillStyle = isStanding ? 'white' : '#555';
+        ctx.fill();
+    });
+
+    pinHUD.material.map.needsUpdate = true;
+}
+
+function createDebugDisplay() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(0.8, 0.4);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const displayMesh = new THREE.Mesh(geometry, material);
+    displayMesh.userData.canvas = canvas;
+    displayMesh.userData.context = context;
+
+    return displayMesh;
+}
+
+function updateDebugDisplay(gamepad) {
+    if (!debugDisplay || !gamepad) return;
+
+    const context = debugDisplay.userData.context;
+    const canvas = debugDisplay.userData.canvas;
+
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    context.font = '20px sans-serif';
+
+    gamepad.buttons.forEach((button, index) => {
+        const x = 20 + (index % 6) * 80;
+        const y = 40 + Math.floor(index / 6) * 100;
+
+        // Draw button state indicator
+        context.fillStyle = button.pressed ? 'green' : 'red';
+        context.fillRect(x, y, 50, 50);
+
+        // Draw button index label
+        context.fillStyle = 'white';
+        context.textAlign = 'center';
+        context.fillText(index, x + 25, y + 80);
+    });
+
+    debugDisplay.material.map.needsUpdate = true;
+}
 
 async function main() {
     await RAPIER.init();
@@ -75,6 +424,21 @@ async function main() {
                 clearInterval(checkFloor);
                 fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
+                updateGameModeUI();
+
+                // // Position and show the debug display once the world is set up
+                // if (debugDisplay) {
+                //     const cameraPosition = new THREE.Vector3();
+                //     camera.getWorldPosition(cameraPosition);
+                //     const cameraQuaternion = new THREE.Quaternion();
+                //     camera.getWorldQuaternion(cameraQuaternion);
+                //     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                //     debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                //     debugDisplay.position.y += 0.5; // Place it a bit higher
+                //     debugDisplay.quaternion.copy(cameraQuaternion);
+                //     debugDisplay.visible = true;
+                // }
             }
         }, 150);
     });
@@ -141,15 +505,8 @@ function animate(timestamp, frame) {
 
     renderer.render(scene, camera);
 
-    if (exitConfirmationMesh) {
-        const cameraPosition = new THREE.Vector3();
-        const cameraQuaternion = new THREE.Quaternion();
-        camera.getWorldPosition(cameraPosition);
-        camera.getWorldQuaternion(cameraQuaternion);
-
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2)); // Place 2 units in front
-        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+    if (pinHUD && pinHUD.visible) {
+        drawPinHUD();
     }
 
     if (renderer.xr.isPresenting) {
@@ -192,6 +549,42 @@ function animate(timestamp, frame) {
 
             if (controller && controller.gamepad) {
 
+                // Handle floor height adjustment with grip and thumbstick
+                const ballLocation = getBallLocationState();
+                const canAdjust = ballLocation !== 'lane';
+
+                if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
+                    // On initial press, freeze the pins
+                    if (!gripButtonState[i]) {
+                        gripButtonState[i] = true;
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
+                    }
+
+                    const thumbstickY = controller.gamepad.axes[3];
+                    if (Math.abs(thumbstickY) > 0.1) {
+                        const yDelta = thumbstickY * -0.01; // Adjust speed and direction
+                        floorOffset += yDelta;
+                        updateFloorAndLanePosition(yDelta);
+
+                        // Clear any existing timer
+                        if (floorOffsetSaveTimer) {
+                            clearTimeout(floorOffsetSaveTimer);
+                        }
+
+                        // Set a new timer to save after 2 minutes of inactivity
+                        floorOffsetSaveTimer = setTimeout(() => {
+                            localStorage.setItem('floorOffset', floorOffset);
+                            floorOffsetSaveTimer = null;
+                        }, 120000); // 2 minutes
+                    }
+                } else if (gripButtonState[i]) {
+                    // On release, unfreeze the pins
+                    gripButtonState[i] = false;
+                    const pins = dynamicObjects.filter(obj => obj.isPin);
+                    pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
+                }
+
                 // Handle B/Y button (index 5) for exiting
                 if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                     endSessionButtonState[i] = true; // Mark as pressed
@@ -203,6 +596,16 @@ function animate(timestamp, frame) {
                         // First press: show confirmation
                         exitConfirmationActive = true;
                         exitConfirmationMesh = createExitConfirmationMesh();
+
+                        // Position the exit menu in world space
+                        const cameraPosition = new THREE.Vector3();
+                        camera.getWorldPosition(cameraPosition);
+                        const cameraQuaternion = new THREE.Quaternion();
+                        camera.getWorldQuaternion(cameraQuaternion);
+                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
+                        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+
                         scene.add(exitConfirmationMesh);
 
                         // Auto-dismiss after 5 seconds
@@ -227,6 +630,104 @@ function animate(timestamp, frame) {
                 // Also dismiss on trigger press (index 0)
                 if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
                     dismissExitConfirmation();
+                }
+
+                // // Update debug display for the left controller
+                // if (i === 0) {
+                //     updateDebugDisplay(controller.gamepad);
+                // }
+
+                // Handle options menu toggle (left controller, options button is 12)
+                if (i === 0) { // Left controller
+                    if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
+                        menuButtonState = true;
+                        if (optionsMenu) {
+                            // If menu is currently visible, it's about to be hidden. Save the state.
+                            if (optionsMenu.visible) {
+                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
+                                if (selectedButton) {
+                                    gameMode = selectedButton.userData.mode;
+                                    localStorage.setItem('gameMode', gameMode);
+                                    updateGameModeUI();
+                                }
+                            }
+
+                            optionsMenu.visible = !optionsMenu.visible;
+
+                            // If it was just made visible, position it.
+                            if (optionsMenu.visible) {
+                                const cameraPosition = new THREE.Vector3();
+                                camera.getWorldPosition(cameraPosition);
+                                const cameraQuaternion = new THREE.Quaternion();
+                                camera.getWorldQuaternion(cameraQuaternion);
+                                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                                optionsMenu.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                                optionsMenu.quaternion.copy(cameraQuaternion);
+                            }
+                        }
+                    } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
+                        menuButtonState = false;
+                    }
+                }
+
+                // Handle Pin HUD toggle (left controller, thumbstick press is 3)
+                if (i === 0) {
+                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
+                        hudButtonState = true;
+                        if (pinHUD) {
+                            pinHUD.visible = !pinHUD.visible;
+                            if (pinHUD.visible && laneObject) {
+                                // Position the HUD above where the scoreboard would be
+                                const lanePosition = laneObject.mesh.position;
+                                pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                                if (scoreboard) {
+                                    pinHUD.quaternion.copy(scoreboard.quaternion); // Match orientation
+                                }
+                            }
+                        }
+                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                        hudButtonState = false;
+                    }
+                }
+
+                // Handle menu navigation and selection
+                if (optionsMenu && optionsMenu.visible) {
+                    const buttons = optionsMenu.userData.buttons;
+                    // Navigation with thumbsticks (either controller)
+                    const thumbstickY = controller.gamepad.axes[3];
+                    if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
+                        thumbstickYState[i] = -1;
+                        const oldIndex = selectedMenuIndex;
+                        selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
+                        if (oldIndex !== selectedMenuIndex) {
+                            updateButtonAppearance(buttons[oldIndex], false);
+                            updateButtonAppearance(buttons[selectedMenuIndex], true);
+                        }
+                    } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
+                        thumbstickYState[i] = 1;
+                        const oldIndex = selectedMenuIndex;
+                        selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
+                        if (oldIndex !== selectedMenuIndex) {
+                            updateButtonAppearance(buttons[oldIndex], false);
+                            updateButtonAppearance(buttons[selectedMenuIndex], true);
+                        }
+                    } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
+                        thumbstickYState[i] = 0;
+                    }
+
+                    // Selection with trigger (either controller)
+                    if (controller.gamepad.buttons[0].pressed && !triggerState[i]) {
+                        triggerState[i] = true;
+                        const selectedButton = buttons[selectedMenuIndex];
+                        if (selectedButton) {
+                            gameMode = selectedButton.userData.mode;
+                            localStorage.setItem('gameMode', gameMode);
+                            optionsMenu.visible = false;
+                            updateGameModeUI();
+                        }
+                    } else if (!controller.gamepad.buttons[0].pressed) {
+                        triggerState[i] = false;
+                    }
                 }
             }
         }
@@ -294,12 +795,15 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     setLanePosition(initialPosition);
 
     // Create an infinite floor plane to prevent objects from falling through
-    const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor-.25, 0);
+    const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor - 0.25, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
     const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
     world.createCollider(floorColliderDesc, floorBody);
+
+    // Apply initial floor offset from localStorage
+    updateFloorAndLanePosition();
 
     // Create Bowling Ball
     const ballGltf = await loader.loadAsync('3d/ball.glb');
@@ -426,7 +930,29 @@ function resetPins() {
     dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
 
     // Create new pins
-    createPins(fY_floor);
+    createPins(fY_floor + floorOffset);
+}
+
+function getBallLocationState() {
+    if (holdingController) {
+        return 'in-hand';
+    }
+
+    const ball = dynamicObjects.find(obj => obj.isBall);
+    if (!ball) {
+        return 'noball';
+    }
+
+    const position = ball.body.translation();
+    const adjustedFloorY = fY_floor + floorOffset;
+
+    if (position.y < adjustedFloorY + 0.1 && position.y > adjustedFloorY) {
+        return 'gutter';
+    } else if (position.y < adjustedFloorY) {
+        return 'ground';
+    } else {
+        return 'lane';
+    }
 }
 
 function dismissExitConfirmation() {
@@ -440,6 +966,7 @@ function dismissExitConfirmation() {
         exitConfirmationTimer = null;
     }
 }
+
 
 function createExitConfirmationMesh() {
     const canvas = document.createElement('canvas');
@@ -464,6 +991,31 @@ function createExitConfirmationMesh() {
     const mesh = new THREE.Mesh(geometry, material);
 
     return mesh;
+}
+
+function updateFloorAndLanePosition(yDelta = 0) {
+    if (laneObject) {
+        const newPos = laneObject.mesh.position.clone();
+        newPos.y = fY_floor + floorOffset;
+        setLanePosition(newPos);
+    }
+    if (floorBody) {
+        const floorPosition = floorBody.translation();
+        floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
+    }
+
+    // If pins are kinematic (i.e., being moved with the floor), update their position too.
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    pins.forEach(pin => {
+        if (pin.body.bodyType() === RAPIER.RigidBodyType.KinematicPositionBased) {
+            const currentPos = pin.body.translation();
+            pin.body.setNextKinematicTranslation({
+                x: currentPos.x,
+                y: currentPos.y + yDelta,
+                z: currentPos.z
+            });
+        }
+    });
 }
 
 function setLanePosition(position) {
@@ -531,6 +1083,13 @@ async function init() {
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
 
+    optionsMenu = createOptionsMenu();
+    scoreboard = createScoreboard();
+    pinHUD = createPinHUD();
+    // debugDisplay = createDebugDisplay();
+    // scene.add(debugDisplay);
+    // debugDisplay.visible = false; // Initially hidden
+
     placementMatrix = new THREE.Matrix4();
     
     renderer.setAnimationLoop(animate);
@@ -542,15 +1101,11 @@ async function init() {
             if (ball) {
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const position = ball.body.translation();
-                if (position.y < fY_floor+.1 && position.y > fY_floor) {console.log('gutter');}
-                else if (position.y < fY_floor){console.log('ground');}
-                else {console.log('lane');}
+                const ballLocation = getBallLocationState();
 
-                const isBelowFloor = position.y < fY_floor+.1; 
-                //console.log(position.y,fY_floor+.1);
+                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                if (!isMoving || isBelowFloor) {
+                if (!isMoving || isBelowLane) {
                     // If the ball is not moving or has fallen, clear the fallen pins
                     clearFallenPins();
 
