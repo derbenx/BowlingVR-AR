@@ -67,6 +67,8 @@ let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
 let laneCollisionVisualizer = null;
+const loader = new GLTFLoader();
+let sceneSetupInitiated = false;
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
@@ -249,7 +251,9 @@ function drawScoreboard() {
 
 function startNewGame() {
     // Ensure any open dialogs like "Play Again?" are closed.
-    dismissConfirmationDialog();
+    if (activeConfirmationDialog) {
+        activeConfirmationDialog.userData.dismiss();
+    }
 
     // This is the code for a clean, empty scoreboard.
     scoreData = [];
@@ -610,56 +614,20 @@ async function main() {
     world = new RAPIER.World(gravity);
     world.integrationParameters.dt = 1/120; //90fps ?
 
-    const loader = new GLTFLoader();
-
     const arButton = ARButton.createButton(renderer, {
         requiredFeatures: ['local-floor', 'plane-detection']
     });
     document.body.appendChild(arButton);
 
     renderer.xr.addEventListener('sessionstart', () => {
-        const setupScene = async () => {
-            let fY = 0;
-            // Wait for a plane to be detected
-            await new Promise(resolve => {
-                const checkFloor = setInterval(() => {
-                    if (planes.children.length > 0) {
-                        for (const planeMesh of planes.children) {
-                            fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-                        }
-                        clearInterval(checkFloor);
-                        resolve();
-                    }
-                }, 150);
-            });
-
-            fY_floor = fY;
-            await placeScene(fY, loader, world, dynamicObjects); // Await the async function
-            updateGameModeUI(); // Now this runs after placeScene is complete
-
-            // Position and show the debug display once the world is set up
-            if (showButtons && debugDisplay) {
-                const cameraPosition = new THREE.Vector3();
-                camera.getWorldPosition(cameraPosition);
-                const cameraQuaternion = new THREE.Quaternion();
-                camera.getWorldQuaternion(cameraQuaternion);
-                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-
-                debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                debugDisplay.position.y += 0.5; // Place it a bit higher
-                debugDisplay.quaternion.copy(cameraQuaternion);
-                debugDisplay.visible = true;
-            }
-        };
-
-        setupScene();
+        // Scene setup is now handled in the animate loop
     });
 
     renderer.xr.addEventListener('sessionend', cleanupScene);
 
     // Setup plane detection
     planes = new XRPlanes(renderer);
-    //scene.add(planes);
+    scene.add(planes);
 
     if (navigator.xr && navigator.xr.isSessionSupported) {
         navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
@@ -676,6 +644,36 @@ async function main() {
 }
 
 function animate(timestamp, frame) {
+    if (renderer.xr.isPresenting && !sceneSetupInitiated && frame) {
+        if (planes.children.length > 0) {
+            sceneSetupInitiated = true;
+
+            let fY = 0;
+            for (const planeMesh of planes.children) {
+                fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+            }
+            fY_floor = fY;
+
+            (async () => {
+                await placeScene(fY, loader, world, dynamicObjects);
+                updateGameModeUI();
+
+                if (showButtons && debugDisplay) {
+                    const cameraPosition = new THREE.Vector3();
+                    camera.getWorldPosition(cameraPosition);
+                    const cameraQuaternion = new THREE.Quaternion();
+                    camera.getWorldQuaternion(cameraQuaternion);
+                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                    debugDisplay.position.y += 0.5; // Place it a bit higher
+                    debugDisplay.quaternion.copy(cameraQuaternion);
+                    debugDisplay.visible = true;
+                }
+            })();
+        }
+    }
+
     // Step the physics world first
     if(world) world.step();
 
