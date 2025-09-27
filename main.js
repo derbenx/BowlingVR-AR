@@ -987,7 +987,6 @@ function getFallenPins() {
 }
 
 function resetPins() {
-    dismissExitConfirmation();
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
