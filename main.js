@@ -44,17 +44,14 @@ let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
-let exitConfirmationActive = false;
-let exitConfirmationMesh = null;
-let exitConfirmationTimer = null;
-let resetConfirmationActive = false;
-let resetConfirmationMesh = null;
+let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
@@ -567,25 +564,54 @@ function animate(timestamp, frame) {
             controller.userData.lastQuaternion.copy(currentQuaternion);
 
             if (controller && controller.gamepad) {
-                const dialogOpen = (optionsMenu && optionsMenu.visible) || exitConfirmationActive || resetConfirmationActive;
+                const dialogOpen = (optionsMenu && optionsMenu.visible) || activeConfirmationDialog;
 
                 // --- DIALOG INPUT HANDLING ---
                 if (dialogOpen) {
-                    // --- Exit Confirmation Dialog ---
-                    if (exitConfirmationActive) {
-                        // Confirm with A/X/Trigger (buttons 0, 4)
-                        if ((controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i])) {
+                    // --- Generic Confirmation Dialog ---
+                    if (activeConfirmationDialog) {
+                        const dialog = activeConfirmationDialog;
+                        // Navigation with thumbsticks
+                        const thumbstickX = controller.gamepad.axes[2];
+                        if (thumbstickX < -0.5 && thumbstickXState[i] !== -1) { // Left
+                            thumbstickXState[i] = -1;
+                            dialog.userData.selectedIndex = Math.max(0, dialog.userData.selectedIndex - 1);
+                            dialog.userData.update();
+                        } else if (thumbstickX > 0.5 && thumbstickXState[i] !== 1) { // Right
+                            thumbstickXState[i] = 1;
+                            dialog.userData.selectedIndex = Math.min(dialog.userData.buttons.length - 1, dialog.userData.selectedIndex + 1);
+                            dialog.userData.update();
+                        } else if (Math.abs(thumbstickX) < 0.2) { // Neutral
+                            thumbstickXState[i] = 0;
+                        }
+
+                        // Confirm with A/X/Trigger
+                        const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
+                        if (confirmButtonPressed) {
                             if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
                             if (controller.gamepad.buttons[4].pressed) resetButtonState[i] = true;
 
-                            dismissExitConfirmation();
-                            renderer.xr.getSession().end();
+                            const selectedButton = dialog.userData.buttons[dialog.userData.selectedIndex];
+                            const action = selectedButton.userData.action;
+
+                            switch (action) {
+                                case 'dismiss':
+                                    dismissConfirmationDialog();
+                                    break;
+                                case 'exit':
+                                    renderer.xr.getSession().end();
+                                    break;
+                                case 'reset':
+                                    resetPins();
+                                    dismissConfirmationDialog();
+                                    break;
+                            }
                         }
 
-                        // Cancel with B/Y (button 5)
+                        // Cancel with B/Y
                         if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                             endSessionButtonState[i] = true;
-                            dismissExitConfirmation();
+                            dismissConfirmationDialog();
                         }
                     }
 
@@ -636,29 +662,11 @@ function animate(timestamp, frame) {
                         }
                     }
 
-                    // --- Reset Confirmation Dialog ---
-                    if (resetConfirmationActive) {
-                        // Confirm with A/X/Trigger (buttons 0, 4)
-                        const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
-                        if (confirmButtonPressed) {
-                            if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
-                            if (controller.gamepad.buttons[4].pressed) resetButtonState[i] = true;
-
-                            resetPins();
-                            dismissResetConfirmation();
-                        }
-
-                        // Cancel with B/Y (button 5)
-                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
-                            endSessionButtonState[i] = true;
-                            dismissResetConfirmation();
-                        }
-                    }
-
                     // Handle button release states for dialog controls
                     if (!controller.gamepad.buttons[0].pressed) triggerState[i] = false;
                     if (!controller.gamepad.buttons[4].pressed) resetButtonState[i] = false;
                     if (!controller.gamepad.buttons[5].pressed) endSessionButtonState[i] = false;
+                    if (Math.abs(controller.gamepad.axes[2]) < 0.2) thumbstickXState[i] = 0;
 
                 }
                 // --- DEFAULT GAME INPUT HANDLING ---
@@ -694,19 +702,17 @@ function animate(timestamp, frame) {
                     // Handle B/Y button (index 5) for initiating exit
                     if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                         endSessionButtonState[i] = true;
-                        exitConfirmationActive = true;
-                        exitConfirmationMesh = createExitConfirmationMesh();
 
-                        const cameraPosition = new THREE.Vector3();
-                        camera.getWorldPosition(cameraPosition);
-                        const cameraQuaternion = new THREE.Quaternion();
-                        camera.getWorldQuaternion(cameraQuaternion);
-                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
-                        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+                        activeConfirmationDialog = createConfirmationDialog(
+                            'Exit Game?',
+                            [
+                                { text: 'No', action: 'dismiss' },
+                                { text: 'Yes', action: 'exit' }
+                            ],
+                            renderer
+                        );
+                        scene.add(activeConfirmationDialog);
 
-                        scene.add(exitConfirmationMesh);
-                        exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
                     } else if (!controller.gamepad.buttons[5].pressed) {
                         endSessionButtonState[i] = false;
                     }
@@ -715,18 +721,19 @@ function animate(timestamp, frame) {
                     if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
                         resetButtonState[i] = true;
 
-                        resetConfirmationActive = true;
-                        resetConfirmationMesh = createResetConfirmationMesh();
-
-                        const cameraPosition = new THREE.Vector3();
-                        camera.getWorldPosition(cameraPosition);
-                        const cameraQuaternion = new THREE.Quaternion();
-                        camera.getWorldQuaternion(cameraQuaternion);
-                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                        resetConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
-                        resetConfirmationMesh.quaternion.copy(cameraQuaternion);
-
-                        scene.add(resetConfirmationMesh);
+                        if (gameMode === 'scoring') {
+                            activeConfirmationDialog = createConfirmationDialog(
+                                'Reset the game?',
+                                [
+                                    { text: 'No', action: 'dismiss' },
+                                    { text: 'Yes', action: 'reset' }
+                                ],
+                                renderer
+                            );
+                            scene.add(activeConfirmationDialog);
+                        } else { // freeplay mode
+                            resetPins();
+                        }
 
                     } else if (!controller.gamepad.buttons[4].pressed) {
                         resetButtonState[i] = false;
@@ -1023,77 +1030,114 @@ function getBallLocationState() {
     }
 }
 
-function dismissExitConfirmation() {
-    if (exitConfirmationMesh) {
-        scene.remove(exitConfirmationMesh);
-        exitConfirmationMesh = null;
-    }
-    exitConfirmationActive = false;
-    if (exitConfirmationTimer) {
-        clearTimeout(exitConfirmationTimer);
-        exitConfirmationTimer = null;
-    }
+
+function createConfirmationDialog(title, buttons, renderer) {
+    const dialog = new THREE.Group();
+    dialog.name = "confirmationDialog";
+    dialog.userData.buttons = [];
+    dialog.userData.selectedIndex = 0; // Default to the first button ("No")
+
+    // Background panel
+    const panelGeo = new THREE.PlaneGeometry(0.8, 0.4);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    dialog.add(panel);
+
+    // Title text
+    const titleCanvas = document.createElement('canvas');
+    titleCanvas.width = 512;
+    titleCanvas.height = 128;
+    const titleContext = titleCanvas.getContext('2d');
+    titleContext.fillStyle = 'white';
+    titleContext.font = 'bold 40px sans-serif';
+    titleContext.textAlign = 'center';
+    titleContext.textBaseline = 'middle';
+    titleContext.fillText(title, titleCanvas.width / 2, titleCanvas.height / 2);
+    const titleTexture = new THREE.CanvasTexture(titleCanvas);
+    const titleGeo = new THREE.PlaneGeometry(0.7, 0.1);
+    const titleMat = new THREE.MeshBasicMaterial({ map: titleTexture, transparent: true });
+    const titleMesh = new THREE.Mesh(titleGeo, titleMat);
+    titleMesh.position.y = 0.1;
+    titleMesh.position.z = 0.01;
+    dialog.add(titleMesh);
+
+    // Function to draw a single button
+    const updateButtonAppearance = (button, selected) => {
+        const context = button.userData.context;
+        const canvas = button.userData.canvas;
+        context.fillStyle = '#444';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.lineWidth = 10;
+        context.strokeRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'white';
+        context.font = 'bold 40px sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(button.userData.text, canvas.width / 2, canvas.height / 2);
+        button.material.map.needsUpdate = true;
+    };
+
+    // Create and position buttons
+    const totalWidth = (buttons.length - 1) * 0.3;
+    const startX = -totalWidth / 2;
+
+    buttons.forEach((btn, index) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.25, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.x = startX + index * 0.3;
+        mesh.position.y = -0.1;
+        mesh.position.z = 0.01;
+        mesh.userData = {
+            ...btn,
+            isButton: true,
+            canvas: canvas,
+            context: context,
+        };
+
+        dialog.userData.buttons.push(mesh);
+        dialog.add(mesh);
+
+        updateButtonAppearance(mesh, index === dialog.userData.selectedIndex);
+    });
+
+    // Add an update method to the dialog itself
+    dialog.userData.update = () => {
+        dialog.userData.buttons.forEach((btn, index) => {
+            updateButtonAppearance(btn, index === dialog.userData.selectedIndex);
+        });
+    };
+
+    // Add a dismiss method
+    dialog.userData.dismiss = () => {
+        scene.remove(dialog);
+        activeConfirmationDialog = null;
+    };
+
+    // Position the dialog in front of the camera
+    const camera = renderer.xr.getCamera();
+    const cameraPosition = new THREE.Vector3();
+    camera.getWorldPosition(cameraPosition);
+    const cameraQuaternion = new THREE.Quaternion();
+    camera.getWorldQuaternion(cameraQuaternion);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+    dialog.position.copy(cameraPosition).add(forward.multiplyScalar(2));
+    dialog.quaternion.copy(cameraQuaternion);
+
+    return dialog;
 }
 
-
-function createExitConfirmationMesh() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
-
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    context.fillStyle = 'white';
-    context.font = '30px sans-serif';
-    context.textAlign = 'center';
-    context.fillText('Exit Game?', canvas.width / 2, canvas.height / 2 - 30);
-    context.fillText('Confirm: A/X or Trigger', canvas.width / 2, canvas.height / 2 + 10);
-    context.fillText('Cancel: B/Y', canvas.width / 2, canvas.height / 2 + 40);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-
-    const geometry = new THREE.PlaneGeometry(1, 0.5);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-    const mesh = new THREE.Mesh(geometry, material);
-
-    return mesh;
-}
-
-function createResetConfirmationMesh() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
-
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    context.fillStyle = 'white';
-    context.font = '30px sans-serif';
-    context.textAlign = 'center';
-    context.fillText('Reset the game?', canvas.width / 2, canvas.height / 2 - 30);
-    context.fillText('Confirm: A/X or Trigger', canvas.width / 2, canvas.height / 2 + 10);
-    context.fillText('Cancel: B/Y', canvas.width / 2, canvas.height / 2 + 40);
-
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-
-    const geometry = new THREE.PlaneGeometry(1, 0.5);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-    const mesh = new THREE.Mesh(geometry, material);
-
-    return mesh;
-}
-
-function dismissResetConfirmation() {
-    if (resetConfirmationMesh) {
-        scene.remove(resetConfirmationMesh);
-        resetConfirmationMesh = null;
+function dismissConfirmationDialog() {
+    if (activeConfirmationDialog) {
+        activeConfirmationDialog.userData.dismiss();
     }
-    resetConfirmationActive = false;
 }
 
 function updateFloorAndLanePosition(yDelta = 0) {
