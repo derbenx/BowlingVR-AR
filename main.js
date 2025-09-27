@@ -26,48 +26,6 @@ const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GRO
 // Floor collides with the Ball ONLY
 const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-const scene = new THREE.Scene();
-const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
-let world, planes;
-let dynamicObjects = [];
-let holdingController = null;
-let placementMatrix = new THREE.Matrix4();
-let camera;
-let pinModel, pinVertices, fY_floor;
-let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
-let resetButtonState = [false, false];
-let endSessionButtonState = [false, false];
-let gripButtonState = [false, false];
-let triggerState = [false, false];
-let gameMode = localStorage.getItem('gameMode') || 'practice';
-let pinsFallenResetTimer = null;
-let allPinsFallen = false;
-let exitConfirmationActive = false;
-let exitConfirmationMesh = null;
-let exitConfirmationTimer = null;
-let floorOffsetSaveTimer = null;
-let optionsMenu = null;
-let menuButtonState = false;
-let hudButtonState = false;
-let resetConfirmationDialog = null;
-let selectedMenuIndex = 0;
-let resetDialogSelectionIndex = 0; // 0 for NO, 1 for YES
-let thumbstickXState = [0, 0]; // For left/right dialog navigation
-let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
-let scoreboard = null;
-let scoreData = [];
-let currentFrame = 0;
-let currentRoll = 0;
-let isGameOver = false;
-let pinHUD = null;
-let debugDisplay = null;
-let laneObject = null;
-let floorBody = null;
-let controllerWantsToHold = null;
-let visdb=0;//debug stuff
-let laneCollisionVisualizer = null;
-
 function updateButtonAppearance(button, hovered) {
     if (!button) return;
     const context = button.userData.context;
@@ -152,7 +110,7 @@ function updateGameModeUI() {
             scoreboard.visible = true;
             resetScoreboard(); // Load placeholder data and draw
         }
-    } else { // 'freeplay'
+    } else { // 'practice'
         if (scoreboard) {
             scoreboard.visible = false;
         }
@@ -312,8 +270,7 @@ function drawPinHUD() {
     const canvas = pinHUD.userData.canvas;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // No background fill for a transparent HUD
 
     // Pin positions in a standard bowling triangle layout
     const pinLayout = [
@@ -329,16 +286,17 @@ function drawPinHUD() {
     ctx.lineTo(pinLayout[6].x - 20, pinLayout[6].y - 20); // Top-left
     ctx.lineTo(pinLayout[9].x + 20, pinLayout[9].y - 20); // Top-right
     ctx.closePath();
-    ctx.strokeStyle = 'white';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const pins = dynamicObjects.filter(obj => obj.isPin);
+    const allPins = dynamicObjects.filter(obj => obj.isPin);
 
     pinLayout.forEach((pos, index) => {
+        // Find the specific pin by its index, regardless of its position in the array
+        const pin = allPins.find(p => p.pinIndex === index);
         let isStanding = false;
-        if (pins[index]) {
-            const pin = pins[index];
+        if (pin) {
             const up = new THREE.Vector3(0, 1, 0);
             const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
             const pinUp = up.clone().applyQuaternion(quaternion);
@@ -347,7 +305,7 @@ function drawPinHUD() {
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = isStanding ? 'white' : '#555';
+        ctx.fillStyle = isStanding ? 'rgba(255, 255, 255, 0.8)' : 'rgba(85, 85, 85, 0.5)';
         ctx.fill();
     });
 
@@ -403,6 +361,7 @@ function createResetConfirmationDialog() {
     const qMat = new THREE.MeshBasicMaterial({ map: qTexture, transparent: true });
     const qMesh = new THREE.Mesh(qGeo, qMat);
     qMesh.position.y = 0.15;
+    qMesh.position.z = 0.01; // Add a small offset to prevent Z-fighting
     dialog.add(qMesh);
 
     // Button creation helper
@@ -445,51 +404,52 @@ function createResetConfirmationDialog() {
     return dialog;
 }
 
-function createDebugDisplay() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+const scene = new THREE.Scene();
+const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
+let world, planes;
+let dynamicObjects = [];
+let holdingController = null;
+let placementMatrix = new THREE.Matrix4();
+let camera;
+let pinModel, pinVertices, fY_floor;
+let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
+let gripButtonState = [false, false];
+let floorOffsetSaveTimer = null;
+let resetButtonState = [false, false];
+let endSessionButtonState = [false, false];
+let triggerState = [false, false];
+let thumbstickXState = [0, 0]; // For left/right dialog navigation
+let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 
-    const texture = new THREE.CanvasTexture(canvas);
-    const geometry = new THREE.PlaneGeometry(0.8, 0.4);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+// --- UI and Game State ---
+let gameMode = localStorage.getItem('gameMode') || 'practice';
+let activeUI = 'none'; // 'none', 'optionsMenu', 'resetDialog', 'exitConfirm'
+let optionsMenu = null;
+let menuButtonState = false;
+let selectedMenuIndex = 0;
+let resetConfirmationDialog = null;
+let resetDialogSelectionIndex = 0; // 0 for NO, 1 for YES
+let pinHUD = null;
+let hudButtonState = false;
+let scoreboard = null;
+let scoreData = [];
+let currentFrame = 0;
+let currentRoll = 0;
+let isGameOver = false;
 
-    const displayMesh = new THREE.Mesh(geometry, material);
-    displayMesh.userData.canvas = canvas;
-    displayMesh.userData.context = context;
-
-    return displayMesh;
-}
-
-function updateDebugDisplay(gamepad) {
-    if (!debugDisplay || !gamepad) return;
-
-    const context = debugDisplay.userData.context;
-    const canvas = debugDisplay.userData.canvas;
-
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    context.font = '20px sans-serif';
-
-    gamepad.buttons.forEach((button, index) => {
-        const x = 20 + (index % 6) * 80;
-        const y = 40 + Math.floor(index / 6) * 100;
-
-        // Draw button state indicator
-        context.fillStyle = button.pressed ? 'green' : 'red';
-        context.fillRect(x, y, 50, 50);
-
-        // Draw button index label
-        context.fillStyle = 'white';
-        context.textAlign = 'center';
-        context.fillText(index, x + 25, y + 80);
-    });
-
-    debugDisplay.material.map.needsUpdate = true;
-}
+// Debug display (commented out)
+let debugDisplay = null;
+let pinsFallenResetTimer = null;
+let allPinsFallen = false;
+let exitConfirmationActive = false;
+let exitConfirmationMesh = null;
+let exitConfirmationTimer = null;
+let laneObject = null;
+let floorBody = null;
+let controllerWantsToHold = null;
+let visdb=0;//debug stuff
+let laneCollisionVisualizer = null;
 
 async function main() {
     await RAPIER.init();
@@ -518,21 +478,6 @@ async function main() {
                 clearInterval(checkFloor);
                 fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
-                updateGameModeUI();
-
-                // // Position and show the debug display once the world is set up
-                // if (debugDisplay) {
-                //     const cameraPosition = new THREE.Vector3();
-                //     camera.getWorldPosition(cameraPosition);
-                //     const cameraQuaternion = new THREE.Quaternion();
-                //     camera.getWorldQuaternion(cameraQuaternion);
-                //     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-
-                //     debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                //     debugDisplay.position.y += 0.5; // Place it a bit higher
-                //     debugDisplay.quaternion.copy(cameraQuaternion);
-                //     debugDisplay.visible = true;
-                // }
             }
         }, 150);
     });
@@ -599,8 +544,15 @@ function animate(timestamp, frame) {
 
     renderer.render(scene, camera);
 
-    if (pinHUD && pinHUD.visible) {
-        drawPinHUD();
+    if (exitConfirmationMesh) {
+        const cameraPosition = new THREE.Vector3();
+        const cameraQuaternion = new THREE.Quaternion();
+        camera.getWorldPosition(cameraPosition);
+        camera.getWorldQuaternion(cameraQuaternion);
+
+        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2)); // Place 2 units in front
+        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
     }
 
     if (renderer.xr.isPresenting) {
@@ -643,6 +595,43 @@ function animate(timestamp, frame) {
 
             if (controller && controller.gamepad) {
 
+                // Handle B/Y button (index 5) for exiting
+                if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                    endSessionButtonState[i] = true; // Mark as pressed
+                    if (exitConfirmationActive) {
+                        // Second press: dismiss the UI first, then end the session
+                        dismissExitConfirmation();
+                        renderer.xr.getSession().end();
+                    } else {
+                        // First press: show confirmation
+                        exitConfirmationActive = true;
+                        exitConfirmationMesh = createExitConfirmationMesh();
+                        scene.add(exitConfirmationMesh);
+
+                        // Auto-dismiss after 5 seconds
+                        exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
+                    }
+                } else if (!controller.gamepad.buttons[5].pressed) {
+                    endSessionButtonState[i] = false; // Mark as released
+                }
+
+                // Handle A/X button (index 4) for resetting pins or dismissing confirmation
+                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
+                    resetButtonState[i] = true; // Mark as pressed
+                    if (exitConfirmationActive) {
+                        dismissExitConfirmation();
+                    } else {
+                        resetPins();
+                    }
+                } else if (!controller.gamepad.buttons[4].pressed) {
+                    resetButtonState[i] = false; // Mark as released
+                }
+
+                // Also dismiss on trigger press (index 0)
+                if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
+                    dismissExitConfirmation();
+                }
+
                 // Handle floor height adjustment with grip and thumbstick
                 const ballLocation = getBallLocationState();
                 const canAdjust = ballLocation !== 'lane';
@@ -677,207 +666,6 @@ function animate(timestamp, frame) {
                     gripButtonState[i] = false;
                     const pins = dynamicObjects.filter(obj => obj.isPin);
                     pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
-                }
-
-                // Handle B/Y button (index 5) for exiting
-                if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
-                    endSessionButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        // Second press: dismiss the UI first, then end the session
-                        dismissExitConfirmation();
-                        renderer.xr.getSession().end();
-                    } else {
-                        // First press: show confirmation
-                        exitConfirmationActive = true;
-                        exitConfirmationMesh = createExitConfirmationMesh();
-
-                        // Position the exit menu in world space
-                        const cameraPosition = new THREE.Vector3();
-                        camera.getWorldPosition(cameraPosition);
-                        const cameraQuaternion = new THREE.Quaternion();
-                        camera.getWorldQuaternion(cameraQuaternion);
-                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
-                        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
-
-                        scene.add(exitConfirmationMesh);
-
-                        // Auto-dismiss after 5 seconds
-                        exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
-                    }
-                } else if (!controller.gamepad.buttons[5].pressed) {
-                    endSessionButtonState[i] = false; // Mark as released
-                }
-
-                // Handle A/X button (index 4) for resetting pins or dismissing confirmation
-                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
-                    resetButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        dismissExitConfirmation();
-                    } else if (gameMode === 'scoring') {
-                        // In scoring mode, show confirmation dialog
-                        if (resetConfirmationDialog) {
-                            resetConfirmationDialog.visible = true;
-                            // Position it
-                            const cameraPosition = new THREE.Vector3();
-                            camera.getWorldPosition(cameraPosition);
-                            const cameraQuaternion = new THREE.Quaternion();
-                            camera.getWorldQuaternion(cameraQuaternion);
-                            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                            resetConfirmationDialog.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                            resetConfirmationDialog.quaternion.copy(cameraQuaternion);
-                        }
-                    } else { // In practice mode, reset directly
-                        resetPins();
-                    }
-                } else if (!controller.gamepad.buttons[4].pressed) {
-                    resetButtonState[i] = false; // Mark as released
-                }
-
-                // Also dismiss on trigger press (index 0)
-                if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
-                    dismissExitConfirmation();
-                }
-
-                // // Update debug display for the left controller
-                // if (i === 0) {
-                //     updateDebugDisplay(controller.gamepad);
-                // }
-
-                // Handle options menu toggle (left controller, options button is 12)
-                if (i === 0) { // Left controller
-                    if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
-                        menuButtonState = true;
-                        if (optionsMenu) {
-                            // If menu is currently visible, it's about to be hidden. Save the state.
-                            if (optionsMenu.visible) {
-                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
-                                if (selectedButton) {
-                                    gameMode = selectedButton.userData.mode;
-                                    localStorage.setItem('gameMode', gameMode);
-                                    updateGameModeUI();
-                                }
-                            }
-
-                            optionsMenu.visible = !optionsMenu.visible;
-
-                            // If it was just made visible, position it.
-                            if (optionsMenu.visible) {
-                                const cameraPosition = new THREE.Vector3();
-                                camera.getWorldPosition(cameraPosition);
-                                const cameraQuaternion = new THREE.Quaternion();
-                                camera.getWorldQuaternion(cameraQuaternion);
-                                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                                optionsMenu.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                                optionsMenu.quaternion.copy(cameraQuaternion);
-                            }
-                        }
-                    } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
-                        menuButtonState = false;
-                    }
-                }
-
-                // Handle Pin HUD toggle (left controller, thumbstick press is 3)
-                if (i === 0) {
-                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
-                        hudButtonState = true;
-                        if (pinHUD) {
-                            pinHUD.visible = !pinHUD.visible;
-                            if (pinHUD.visible && laneObject) {
-                                // Position the HUD above where the scoreboard would be
-                                const lanePosition = laneObject.mesh.position;
-                                pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
-                                if (scoreboard) {
-                                    pinHUD.quaternion.copy(scoreboard.quaternion); // Match orientation
-                                }
-                            }
-                        }
-                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
-                        hudButtonState = false;
-                    }
-                }
-
-                // Handle menu navigation and selection
-                if (optionsMenu && optionsMenu.visible) {
-                    const buttons = optionsMenu.userData.buttons;
-                    // Navigation with thumbsticks (either controller)
-                    const thumbstickY = controller.gamepad.axes[3];
-                    if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
-                        thumbstickYState[i] = -1;
-                        const oldIndex = selectedMenuIndex;
-                        selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
-                        if (oldIndex !== selectedMenuIndex) {
-                            updateButtonAppearance(buttons[oldIndex], false);
-                            updateButtonAppearance(buttons[selectedMenuIndex], true);
-                        }
-                    } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
-                        thumbstickYState[i] = 1;
-                        const oldIndex = selectedMenuIndex;
-                        selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
-                        if (oldIndex !== selectedMenuIndex) {
-                            updateButtonAppearance(buttons[oldIndex], false);
-                            updateButtonAppearance(buttons[selectedMenuIndex], true);
-                        }
-                    } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
-                        thumbstickYState[i] = 0;
-                    }
-
-                    // Selection with trigger (either controller)
-                    if (controller.gamepad.buttons[0].pressed && !triggerState[i]) {
-                        triggerState[i] = true;
-                        const selectedButton = buttons[selectedMenuIndex];
-                        if (selectedButton) {
-                            gameMode = selectedButton.userData.mode;
-                            localStorage.setItem('gameMode', gameMode);
-                            optionsMenu.visible = false;
-                            updateGameModeUI();
-                        }
-                    } else if (!controller.gamepad.buttons[0].pressed) {
-                        triggerState[i] = false;
-                    }
-                }
-
-                // Handle Reset Confirmation Dialog Interaction
-                if (resetConfirmationDialog && resetConfirmationDialog.visible) {
-                    const thumbstickX = controller.gamepad.axes[2]; // Horizontal axis
-
-                    // Navigate left/right
-                    if (thumbstickX < -0.5 && thumbstickXState[i] !== -1) { // Left
-                        thumbstickXState[i] = -1;
-                        if (resetDialogSelectionIndex === 1) { // if YES is selected, move to NO
-                            resetDialogSelectionIndex = 0;
-                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], false);
-                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], true);
-                        }
-                    } else if (thumbstickX > 0.5 && thumbstickXState[i] !== 1) { // Right
-                        thumbstickXState[i] = 1;
-                        if (resetDialogSelectionIndex === 0) { // if NO is selected, move to YES
-                            resetDialogSelectionIndex = 1;
-                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], false);
-                            updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], true);
-                        }
-                    } else if (Math.abs(thumbstickX) < 0.2) { // Neutral
-                        thumbstickXState[i] = 0;
-                    }
-
-                    // Confirm selection with A/X button (4) or trigger (0)
-                    const axPressed = controller.gamepad.buttons[4].pressed;
-                    const triggerPressed = controller.gamepad.buttons[0].pressed;
-
-                    if ((axPressed && !resetButtonState[i]) || (triggerPressed && !triggerState[i])) {
-                        if (resetDialogSelectionIndex === 1) { // "YES" is selected
-                            resetPins();
-                            resetScoreboard();
-                        }
-                        resetConfirmationDialog.visible = false;
-                        resetDialogSelectionIndex = 0; // Default to NO for next time
-                        updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[0], false);
-                        updateResetButtonAppearance(resetConfirmationDialog.userData.buttons[1], false);
-
-                        // Prevent immediate re-trigger
-                        if (axPressed) resetButtonState[i] = true;
-                        if (triggerPressed) triggerState[i] = true;
-                    }
                 }
             }
         }
@@ -1007,26 +795,26 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 }
 
 function createPins(fY) {
-    function createPin(x, z) {
+    function createPin(x, z, index) {
         const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
+        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinIndex: index });
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
 
     const pinSpacing = 0.2;
     const pinStartZ = -7; //where pins are located!
-    
+    let pinIndex = 0;
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
             const x = (i - row / 2) * pinSpacing * 2;
             const z = pinStartZ - row * pinSpacing * 1.732;
-            createPin(x, z);
+            createPin(x, z, pinIndex++);
         }
     }
 }
@@ -1105,6 +893,31 @@ function getBallLocationState() {
     }
 }
 
+function updateFloorAndLanePosition(yDelta = 0) {
+    if (laneObject) {
+        const newPos = laneObject.mesh.position.clone();
+        newPos.y = fY_floor + floorOffset;
+        setLanePosition(newPos);
+    }
+    if (floorBody) {
+        const floorPosition = floorBody.translation();
+        floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
+    }
+
+    // If pins are kinematic (i.e., being moved with the floor), update their position too.
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    pins.forEach(pin => {
+        if (pin.body.bodyType() === RAPIER.RigidBodyType.KinematicPositionBased) {
+            const currentPos = pin.body.translation();
+            pin.body.setNextKinematicTranslation({
+                x: currentPos.x,
+                y: currentPos.y + yDelta,
+                z: currentPos.z
+            });
+        }
+    });
+}
+
 function dismissExitConfirmation() {
     if (exitConfirmationMesh) {
         scene.remove(exitConfirmationMesh);
@@ -1116,7 +929,6 @@ function dismissExitConfirmation() {
         exitConfirmationTimer = null;
     }
 }
-
 
 function createExitConfirmationMesh() {
     const canvas = document.createElement('canvas');
@@ -1143,31 +955,6 @@ function createExitConfirmationMesh() {
     return mesh;
 }
 
-function updateFloorAndLanePosition(yDelta = 0) {
-    if (laneObject) {
-        const newPos = laneObject.mesh.position.clone();
-        newPos.y = fY_floor + floorOffset;
-        setLanePosition(newPos);
-    }
-    if (floorBody) {
-        const floorPosition = floorBody.translation();
-        floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
-    }
-
-    // If pins are kinematic (i.e., being moved with the floor), update their position too.
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-    pins.forEach(pin => {
-        if (pin.body.bodyType() === RAPIER.RigidBodyType.KinematicPositionBased) {
-            const currentPos = pin.body.translation();
-            pin.body.setNextKinematicTranslation({
-                x: currentPos.x,
-                y: currentPos.y + yDelta,
-                z: currentPos.z
-            });
-        }
-    });
-}
-
 function setLanePosition(position) {
     if (laneObject) {
         // Move the visual mesh
@@ -1186,6 +973,10 @@ function setLanePosition(position) {
 function cleanupScene() {
     // Dismiss any active UI
     dismissExitConfirmation();
+    if (optionsMenu) optionsMenu.visible = false;
+    if (resetConfirmationDialog) resetConfirmationDialog.visible = false;
+    if (pinHUD) pinHUD.visible = false;
+    activeUI = 'none';
 
     // Clear any pending timers
     if (pinsFallenResetTimer) {
@@ -1232,14 +1023,6 @@ async function init() {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
     directionalLight.position.set(5, 5, 5);
     scene.add(directionalLight);
-
-    optionsMenu = createOptionsMenu();
-    scoreboard = createScoreboard();
-    pinHUD = createPinHUD();
-    resetConfirmationDialog = createResetConfirmationDialog();
-    // debugDisplay = createDebugDisplay();
-    // scene.add(debugDisplay);
-    // debugDisplay.visible = false; // Initially hidden
 
     placementMatrix = new THREE.Matrix4();
     
