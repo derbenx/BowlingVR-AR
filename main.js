@@ -264,10 +264,9 @@ function startNewGame() {
     isGameOver = false;
     pinsDownLastRoll = 0;
 
-    // We need to make sure pins are reset when a new scoring game starts
-    if (world) { // Check if physics world is ready
-        resetPins();
-    }
+    // The initial pin setup is handled by placeScene.
+    // Subsequent resets are handled by the scoring logic (processRoll).
+    // This function should only reset the score and state variables.
 
     drawScoreboard();
 }
@@ -381,7 +380,7 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
             scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
             pinsDownLastRoll = fallenPins.length;
             currentRoll++;
-            clearFallenPins();
+            hideFallenPins();
         }
     } else { // Second roll
         if (fallenPins.length === 10) { // Spare
@@ -405,7 +404,7 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
             resetPins();
             pinsDownLastRoll = 0;
         } else {
-            clearFallenPins();
+            hideFallenPins();
             pinsDownLastRoll = fallenPins.length;
         }
         currentRoll++;
@@ -420,7 +419,7 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
                 resetPins();
                 pinsDownLastRoll = 0;
             } else {
-                clearFallenPins();
+                hideFallenPins();
                 pinsDownLastRoll = fallenPins.length;
             }
         } else {
@@ -942,7 +941,7 @@ function animate(timestamp, frame) {
                                 'Reset the game?',
                                 [
                                     { text: 'No', action: 'dismiss' },
-                                    { text: 'Yes', action: 'reset' }
+                                    { text: 'Yes', action: 'startNewGame' }
                                 ],
                                 renderer
                             );
@@ -1171,21 +1170,13 @@ function createPins(fY) {
     }
 }
 
-function clearFallenPins() {
-    // This function correctly removes fallen pins from the simulation.
-    // 1. It gets a list of fallen pins.
-    // 2. It removes the visual mesh from the Three.js scene.
-    // 3. It removes the physics body from the Rapier world.
-    // 4. It filters the pin object out of the master dynamicObjects array,
-    //    ensuring it's gone from all future physics steps and lookups.
+function hideFallenPins() {
     const fallenPins = getFallenPins();
-    if (fallenPins.length > 0) {
-        for (const pin of fallenPins) {
-            scene.remove(pin.mesh);
-            world.removeRigidBody(pin.body);
-        }
-        // Filter out the removed pins from dynamicObjects
-        dynamicObjects = dynamicObjects.filter(obj => !fallenPins.includes(obj));
+    for (const pin of fallenPins) {
+        // Make the pin invisible
+        pin.mesh.visible = false;
+        // Disable its physics so it doesn't interact with anything
+        pin.body.setEnabled(false);
     }
 }
 
@@ -1208,6 +1199,9 @@ function getFallenPins() {
 }
 
 function resetPins() {
+    // If the floor hasn't been detected yet, we can't place pins.
+    if (fY_floor === undefined) return;
+
     // The confirmation dialog is dismissed by the input handler that calls this.
     // No need to dismiss it here.
     if (pinsFallenResetTimer) {
