@@ -337,12 +337,11 @@ function drawPinHUD() {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-
     pinLayout.forEach((pos, index) => {
         let isStanding = false;
-        if (pins[index]) {
-            const pin = pins[index];
+        // Find the specific pin for this layout position directly from the main array
+        const pin = dynamicObjects.find(p => p.isPin && p.pinId === index);
+        if (pin) {
             const up = new THREE.Vector3(0, 1, 0);
             const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
             const pinUp = up.clone().applyQuaternion(quaternion);
@@ -932,14 +931,16 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 }
 
 function createPins(fY) {
-    function createPin(x, z) {
+    let pinIdCounter = 0;
+
+    function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
+        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -951,7 +952,7 @@ function createPins(fY) {
         for (let i = 0; i < row + 1; i++) {
             const x = (i - row / 2) * pinSpacing * 2;
             const z = pinStartZ - row * pinSpacing * 1.732;
-            createPin(x, z);
+            createPin(x, z, pinIdCounter++);
         }
     }
 }
