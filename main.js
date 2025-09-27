@@ -49,6 +49,7 @@ let exitConfirmationTimer = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
+let hudButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let scoreboard = null;
@@ -56,6 +57,7 @@ let scoreData = [];
 let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
+let pinHUD = null;
 let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
@@ -161,7 +163,7 @@ function createScoreboard() {
     const context = canvas.getContext('2d');
 
     const texture = new THREE.CanvasTexture(canvas);
-    const geometry = new THREE.PlaneGeometry(2.5, 0.3); // A wide banner
+    const geometry = new THREE.PlaneGeometry(3.5, 0.42); // A larger, wide banner
     const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
 
     const boardMesh = new THREE.Mesh(geometry, material);
@@ -197,6 +199,7 @@ function drawScoreboard() {
     ctx.fillStyle = 'white';
 
     // Draw the 10 frames + total box
+    let cumulativeTotal = 0;
     for (let i = 0; i < 11; i++) {
         const x = startX + i * frameWidth;
 
@@ -204,17 +207,19 @@ function drawScoreboard() {
             // Main frame box
             ctx.strokeRect(x, startY, frameWidth, frameHeight);
 
-            // Line for cumulative score
+            // Line for frame score
             ctx.beginPath();
             ctx.moveTo(x, startY + smallBoxSize);
             ctx.lineTo(x + frameWidth, startY + smallBoxSize);
             ctx.stroke();
 
-            // Cumulative score text
+            // Frame score text
+            const frameScore = scoreData[i].frameScore || '';
+            cumulativeTotal += parseInt(frameScore) || 0;
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText(scoreData[i].cumulativeScore, x + frameWidth / 2, startY + smallBoxSize + (frameHeight - smallBoxSize) / 2);
+            ctx.fillText(frameScore, x + frameWidth / 2, startY + smallBoxSize + (frameHeight - smallBoxSize) / 2);
 
             if (i < 9) { // Frames 1-9 have 2 roll boxes
                 ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
@@ -236,7 +241,7 @@ function drawScoreboard() {
             }
         } else { // Final "Total" box
             ctx.strokeRect(x, startY, frameWidth, frameHeight);
-            const totalScore = scoreData.length > 0 ? scoreData[9].cumulativeScore : '';
+            const totalScore = cumulativeTotal.toString();
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -249,32 +254,101 @@ function drawScoreboard() {
 
 function resetScoreboard() {
     // This is placeholder data to test the display logic.
-    // The actual score calculation will be implemented later.
     scoreData = [
-        { rolls: ['7', '2'], cumulativeScore: '9' },
-        { rolls: ['9', '/'], cumulativeScore: '29' },
-        { rolls: ['X', ''], cumulativeScore: '48' },
-        { rolls: ['8', '1'], cumulativeScore: '57' },
-        { rolls: ['X', ''], cumulativeScore: '77' },
-        { rolls: ['X', ''], cumulativeScore: '97' },
-        { rolls: ['X', ''], cumulativeScore: '126' },
-        { rolls: ['9', '0'], cumulativeScore: '135' },
-        { rolls: ['8', '/'], cumulativeScore: '155' },
-        { rolls: ['X', 'X', 'X'], cumulativeScore: '185' }
+        { rolls: ['7', '2'], frameScore: '9' },
+        { rolls: ['9', '/'], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '19' },
+        { rolls: ['8', '1'], frameScore: '9' },
+        { rolls: ['X', ''], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '20' },
+        { rolls: ['X', ''], frameScore: '29' },
+        { rolls: ['9', '0'], frameScore: '9' },
+        { rolls: ['8', '/'], frameScore: '20' },
+        { rolls: ['X', 'X', 'X'], frameScore: '30' }
     ];
 
     // // This is the code for a clean, empty scoreboard.
     // scoreData = [];
     // for (let i = 0; i < 10; i++) {
     //     scoreData.push({
-    //         rolls: i < 9 ? ['', ''] : ['', '', ''], // 10th frame has 3 rolls
-    //         cumulativeScore: ''
+    //         rolls: i < 9 ? ['', ''] : ['', '', ''],
+    //         frameScore: ''
     //     });
     // }
     currentFrame = 0;
     currentRoll = 0;
     isGameOver = false;
     drawScoreboard();
+}
+
+function createPinHUD() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext('2d');
+
+    const texture = new THREE.CanvasTexture(canvas);
+    const geometry = new THREE.PlaneGeometry(0.4, 0.4);
+    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+
+    const hudMesh = new THREE.Mesh(geometry, material);
+    hudMesh.name = "pinHUD";
+    hudMesh.userData.canvas = canvas;
+    hudMesh.userData.context = context;
+
+    hudMesh.visible = false; // Initially hidden
+    scene.add(hudMesh);
+
+    return hudMesh;
+}
+
+function drawPinHUD() {
+    if (!pinHUD) return;
+
+    const ctx = pinHUD.userData.context;
+    const canvas = pinHUD.userData.canvas;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Pin positions in a standard bowling triangle layout
+    const pinLayout = [
+        { x: 128, y: 200 }, // Pin 1 (front)
+        { x: 108, y: 170 }, { x: 148, y: 170 }, // Row 2
+        { x: 88, y: 140 }, { x: 128, y: 140 }, { x: 168, y: 140 }, // Row 3
+        { x: 68, y: 110 }, { x: 108, y: 110 }, { x: 148, y: 110 }, { x: 188, y: 110 }, // Row 4
+    ];
+
+    // Draw triangle outline
+    ctx.beginPath();
+    ctx.moveTo(pinLayout[0].x, pinLayout[0].y + 20); // Bottom point
+    ctx.lineTo(pinLayout[6].x - 20, pinLayout[6].y - 20); // Top-left
+    ctx.lineTo(pinLayout[9].x + 20, pinLayout[9].y - 20); // Top-right
+    ctx.closePath();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+
+    pinLayout.forEach((pos, index) => {
+        let isStanding = false;
+        if (pins[index]) {
+            const pin = pins[index];
+            const up = new THREE.Vector3(0, 1, 0);
+            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+            const pinUp = up.clone().applyQuaternion(quaternion);
+            isStanding = pinUp.y >= 0.5;
+        }
+
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+        ctx.fillStyle = isStanding ? 'white' : '#555';
+        ctx.fill();
+    });
+
+    pinHUD.material.map.needsUpdate = true;
 }
 
 function createDebugDisplay() {
@@ -430,6 +504,10 @@ function animate(timestamp, frame) {
 
 
     renderer.render(scene, camera);
+
+    if (pinHUD && pinHUD.visible) {
+        drawPinHUD();
+    }
 
     if (renderer.xr.isPresenting) {
         const pins = dynamicObjects.filter(obj => obj.isPin);
@@ -589,6 +667,26 @@ function animate(timestamp, frame) {
                         }
                     } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
                         menuButtonState = false;
+                    }
+                }
+
+                // Handle Pin HUD toggle (left controller, thumbstick press is 3)
+                if (i === 0) {
+                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
+                        hudButtonState = true;
+                        if (pinHUD) {
+                            pinHUD.visible = !pinHUD.visible;
+                            if (pinHUD.visible && laneObject) {
+                                // Position the HUD above where the scoreboard would be
+                                const lanePosition = laneObject.mesh.position;
+                                pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                                if (scoreboard) {
+                                    pinHUD.quaternion.copy(scoreboard.quaternion); // Match orientation
+                                }
+                            }
+                        }
+                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                        hudButtonState = false;
                     }
                 }
 
@@ -987,6 +1085,7 @@ async function init() {
 
     optionsMenu = createOptionsMenu();
     scoreboard = createScoreboard();
+    pinHUD = createPinHUD();
     // debugDisplay = createDebugDisplay();
     // scene.add(debugDisplay);
     // debugDisplay.visible = false; // Initially hidden
