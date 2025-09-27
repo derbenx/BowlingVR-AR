@@ -145,7 +145,6 @@ function createDebugDisplay() {
     displayMesh.userData.canvas = canvas;
     displayMesh.userData.context = context;
 
-    scene.add(displayMesh);
     return displayMesh;
 }
 
@@ -205,6 +204,20 @@ async function main() {
                 clearInterval(checkFloor);
                 fY_floor = fY;
                 placeScene(fY, loader, world, dynamicObjects);
+
+                // Position and show the debug display once the world is set up
+                if (debugDisplay) {
+                    const cameraPosition = new THREE.Vector3();
+                    camera.getWorldPosition(cameraPosition);
+                    const cameraQuaternion = new THREE.Quaternion();
+                    camera.getWorldQuaternion(cameraQuaternion);
+                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                    debugDisplay.position.y += 0.5; // Place it a bit higher
+                    debugDisplay.quaternion.copy(cameraQuaternion);
+                    debugDisplay.visible = true;
+                }
             }
         }, 150);
     });
@@ -270,17 +283,6 @@ function animate(timestamp, frame) {
 
 
     renderer.render(scene, camera);
-
-    if (exitConfirmationMesh) {
-        const cameraPosition = new THREE.Vector3();
-        const cameraQuaternion = new THREE.Quaternion();
-        camera.getWorldPosition(cameraPosition);
-        camera.getWorldQuaternion(cameraQuaternion);
-
-        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2)); // Place 2 units in front
-        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
-    }
 
     if (renderer.xr.isPresenting) {
         const pins = dynamicObjects.filter(obj => obj.isPin);
@@ -369,6 +371,16 @@ function animate(timestamp, frame) {
                         // First press: show confirmation
                         exitConfirmationActive = true;
                         exitConfirmationMesh = createExitConfirmationMesh();
+
+                        // Position the exit menu in world space
+                        const cameraPosition = new THREE.Vector3();
+                        camera.getWorldPosition(cameraPosition);
+                        const cameraQuaternion = new THREE.Quaternion();
+                        camera.getWorldQuaternion(cameraQuaternion);
+                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
+                        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+
                         scene.add(exitConfirmationMesh);
 
                         // Auto-dismiss after 5 seconds
@@ -816,8 +828,8 @@ async function init() {
 
     optionsMenu = createOptionsMenu();
     debugDisplay = createDebugDisplay();
-    debugDisplay.position.set(0, 0.4, -1.5); // Position it in the upper part of the view
-    camera.add(debugDisplay);
+    scene.add(debugDisplay);
+    debugDisplay.visible = false; // Initially hidden
 
     placementMatrix = new THREE.Matrix4();
     
