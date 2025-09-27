@@ -628,6 +628,7 @@ async function main() {
     // Setup plane detection
     planes = new XRPlanes(renderer);
     scene.add(planes);
+    planes.visible = false;
 
     if (navigator.xr && navigator.xr.isSessionSupported) {
         navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
@@ -1205,6 +1206,32 @@ function getFallenPins() {
     return fallenPins;
 }
 
+function resetBall() {
+    const ball = dynamicObjects.find(obj => obj.isBall);
+    if (ball) {
+        // If the ball was being held, release it
+        if (holdingController) {
+            holdingController = null;
+        }
+
+        // Ensure the ball is a dynamic body and has the correct collision group
+        ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
+        ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
+
+        // Reset position to its initial spot, accounting for any floor offset changes
+        const initialPos = ball.initialPosition;
+        const resetY = fY_floor + floorOffset + (initialPos.y - fY_floor);
+        ball.body.setTranslation({ x: initialPos.x, y: resetY, z: initialPos.z }, true);
+
+        // Reset velocities
+        ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        ball.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+
+        // Reset throw state
+        isBallThrown = false;
+    }
+}
+
 function resetPins() {
     // The confirmation dialog is dismissed by the input handler that calls this.
     // No need to dismiss it here.
@@ -1226,6 +1253,9 @@ function resetPins() {
 
     // Create new pins
     createPins(fY_floor + floorOffset);
+
+    // Reset the ball's position
+    resetBall();
 }
 
 function getBallLocationState() {
