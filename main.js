@@ -39,6 +39,7 @@ let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
+let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
@@ -48,8 +49,8 @@ let exitConfirmationTimer = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
-let raycaster;
-let hoveredButton = null;
+let selectedMenuIndex = 0;
+let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
@@ -81,6 +82,7 @@ function updateButtonAppearance(button, hovered) {
 function createOptionsMenu() {
     const menu = new THREE.Group();
     menu.name = "optionsMenu";
+    menu.userData.buttons = []; // Initialize a dedicated array for buttons
 
     // Create background panel
     const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
@@ -117,6 +119,10 @@ function createOptionsMenu() {
 
     menu.add(freePlayButton);
     menu.add(scoringButton);
+
+    // Add buttons to the dedicated array, ensuring correct order
+    menu.userData.buttons.push(freePlayButton); // index 0
+    menu.userData.buttons.push(scoringButton); // index 1
 
     menu.visible = false; // Initially hidden
     scene.add(menu);
@@ -283,18 +289,7 @@ function animate(timestamp, frame) {
                     if (Math.abs(thumbstickY) > 0.1) {
                         const yDelta = thumbstickY * -0.01; // Adjust speed and direction
                         floorOffset += yDelta;
-                        updateFloorAndLanePosition();
-
-                        // Also move the kinematic pins by the same delta
-                        const pins = dynamicObjects.filter(obj => obj.isPin);
-                        pins.forEach(pin => {
-                            const currentPos = pin.body.translation();
-                            pin.body.setNextKinematicTranslation({
-                                x: currentPos.x,
-                                y: currentPos.y + yDelta,
-                                z: currentPos.z
-                            });
-                        });
+                        updateFloorAndLanePosition(yDelta);
 
                         // Clear any existing timer
                         if (floorOffsetSaveTimer) {
@@ -351,13 +346,14 @@ function animate(timestamp, frame) {
                     dismissExitConfirmation();
                 }
 
-                // Handle options menu toggle (left controller, thumbstick press - button 3)
+                // Handle options menu toggle (left controller, assuming options button is 3 for now)
                 if (i === 0) { // Left controller
                     if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
                             optionsMenu.visible = !optionsMenu.visible;
                             if (optionsMenu.visible) {
+                                // Position the menu in the world in front of the user
                                 const cameraPosition = new THREE.Vector3();
                                 camera.getWorldPosition(cameraPosition);
                                 const cameraQuaternion = new THREE.Quaternion();
@@ -372,34 +368,42 @@ function animate(timestamp, frame) {
                     }
                 }
 
-                // Handle menu interaction (right controller)
-                if (i === 1 && optionsMenu && optionsMenu.visible) {
-                    const controller = renderer.xr.getController(1);
-                    const controllerGrip = renderer.xr.getControllerGrip(1);
-
-                    const controllerMatrix = controllerGrip.matrixWorld;
-                    const controllerPosition = new THREE.Vector3().setFromMatrixPosition(controllerMatrix);
-                    const controllerDirection = new THREE.Vector3(0, 0, -1).applyMatrix4(new THREE.Matrix4().extractRotation(controllerMatrix));
-
-                    raycaster.set(controllerPosition, controllerDirection);
-                    const intersects = raycaster.intersectObjects(optionsMenu.children);
-
-                    const intersectedButton = intersects.find(intersect => intersect.object.userData.isButton)?.object;
-
-                    if (intersectedButton && intersectedButton !== hoveredButton) {
-                        updateButtonAppearance(hoveredButton, false); // Un-highlight old
-                        hoveredButton = intersectedButton;
-                        updateButtonAppearance(hoveredButton, true); // Highlight new
-                    } else if (!intersectedButton && hoveredButton) {
-                        updateButtonAppearance(hoveredButton, false);
-                        hoveredButton = null;
+                // Handle menu navigation and selection
+                if (optionsMenu && optionsMenu.visible) {
+                    const buttons = optionsMenu.userData.buttons;
+                    // Navigation with thumbsticks (either controller)
+                    const thumbstickY = controller.gamepad.axes[3];
+                    if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
+                        thumbstickYState[i] = -1;
+                        const oldIndex = selectedMenuIndex;
+                        selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
+                        if (oldIndex !== selectedMenuIndex) {
+                            updateButtonAppearance(buttons[oldIndex], false);
+                            updateButtonAppearance(buttons[selectedMenuIndex], true);
+                        }
+                    } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
+                        thumbstickYState[i] = 1;
+                        const oldIndex = selectedMenuIndex;
+                        selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
+                        if (oldIndex !== selectedMenuIndex) {
+                            updateButtonAppearance(buttons[oldIndex], false);
+                            updateButtonAppearance(buttons[selectedMenuIndex], true);
+                        }
+                    } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
+                        thumbstickYState[i] = 0;
                     }
 
-                    if (hoveredButton && controller.gamepad.buttons[0].pressed) { // Trigger press
-                        gameMode = hoveredButton.userData.mode;
-                        localStorage.setItem('gameMode', gameMode);
-                        optionsMenu.visible = false;
-                        console.log(`Game mode set to: ${gameMode}`);
+                    // Selection with trigger (either controller)
+                    if (controller.gamepad.buttons[0].pressed && !triggerState[i]) {
+                        triggerState[i] = true;
+                        const selectedButton = buttons[selectedMenuIndex];
+                        if (selectedButton) {
+                            gameMode = selectedButton.userData.mode;
+                            localStorage.setItem('gameMode', gameMode);
+                            optionsMenu.visible = false;
+                        }
+                    } else if (!controller.gamepad.buttons[0].pressed) {
+                        triggerState[i] = false;
                     }
                 }
             }
@@ -666,7 +670,7 @@ function createExitConfirmationMesh() {
     return mesh;
 }
 
-function updateFloorAndLanePosition() {
+function updateFloorAndLanePosition(yDelta = 0) {
     if (laneObject) {
         const newPos = laneObject.mesh.position.clone();
         newPos.y = fY_floor + floorOffset;
@@ -676,6 +680,19 @@ function updateFloorAndLanePosition() {
         const floorPosition = floorBody.translation();
         floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
     }
+
+    // If pins are kinematic (i.e., being moved with the floor), update their position too.
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    pins.forEach(pin => {
+        if (pin.body.bodyType() === RAPIER.RigidBodyType.KinematicPositionBased) {
+            const currentPos = pin.body.translation();
+            pin.body.setNextKinematicTranslation({
+                x: currentPos.x,
+                y: currentPos.y + yDelta,
+                z: currentPos.z
+            });
+        }
+    });
 }
 
 function setLanePosition(position) {
@@ -744,7 +761,6 @@ async function init() {
     scene.add(directionalLight);
 
     optionsMenu = createOptionsMenu();
-    raycaster = new THREE.Raycaster();
     placementMatrix = new THREE.Matrix4();
     
     renderer.setAnimationLoop(animate);
@@ -757,7 +773,6 @@ async function init() {
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
                 const ballLocation = getBallLocationState();
-                console.log(ballLocation);
 
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
