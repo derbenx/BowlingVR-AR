@@ -1,3 +1,4 @@
+// BUTTONS [ trigger:0, grip:1, stick: 3, A/X: 4, B/Y: 5, options: 12 ]
 const dbg = 0;
 
 import * as THREE from 'three';
@@ -62,7 +63,8 @@ let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
-let visdb=0;//debug stuff
+let showCollision=0;//debug stuff
+let showButtons = 1;
 let laneCollisionVisualizer = null;
 
 function updateButtonAppearance(button, hovered, selected) {
@@ -432,19 +434,19 @@ async function main() {
                 placeScene(fY, loader, world, dynamicObjects);
                 updateGameModeUI();
 
-                // // Position and show the debug display once the world is set up
-                // if (debugDisplay) {
-                //     const cameraPosition = new THREE.Vector3();
-                //     camera.getWorldPosition(cameraPosition);
-                //     const cameraQuaternion = new THREE.Quaternion();
-                //     camera.getWorldQuaternion(cameraQuaternion);
-                //     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+                // Position and show the debug display once the world is set up
+                if (showButtons && debugDisplay) {
+                    const cameraPosition = new THREE.Vector3();
+                    camera.getWorldPosition(cameraPosition);
+                    const cameraQuaternion = new THREE.Quaternion();
+                    camera.getWorldQuaternion(cameraQuaternion);
+                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
 
-                //     debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                //     debugDisplay.position.y += 0.5; // Place it a bit higher
-                //     debugDisplay.quaternion.copy(cameraQuaternion);
-                //     debugDisplay.visible = true;
-                // }
+                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                    debugDisplay.position.y += 0.5; // Place it a bit higher
+                    debugDisplay.quaternion.copy(cameraQuaternion);
+                    debugDisplay.visible = true;
+                }
             }
         }, 150);
     });
@@ -689,16 +691,33 @@ function animate(timestamp, frame) {
                 }
 
                 // --- UNIVERSAL INPUT HANDLING ---
+                // Update debug display for the left controller
+                if (showButtons && i === 0) {
+                    updateDebugDisplay(controller.gamepad);
+                }
+
                 // Handle options menu toggle (left controller, options button is 12)
                 if (i === 0) { // Left controller
                     if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
-                            optionsMenu.visible = !optionsMenu.visible;
-
+                            // If menu is already visible, this press is a CONFIRM action
                             if (optionsMenu.visible) {
-                                // Reset to default selection and update appearance
-                                selectedMenuIndex = 0;
+                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
+                                if (selectedButton) {
+                                    gameMode = selectedButton.userData.mode;
+                                    localStorage.setItem('gameMode', gameMode);
+                                    updateGameModeUI();
+                                }
+                                optionsMenu.visible = false;
+                            } else {
+                                // If menu is not visible, this press OPENS it
+                                optionsMenu.visible = true;
+
+                                // Find index of current game mode and set it as selected
+                                const currentModeIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
+                                selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
+
                                 optionsMenu.userData.buttons.forEach((button, index) => {
                                     updateButtonAppearance(button, false, index === selectedMenuIndex);
                                 });
@@ -780,7 +799,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
             world.createCollider(trimeshDesc, laneBody);
 
-            if (visdb){
+            if (showCollision){
                 // Create and add the visualizer mesh
                 const visualizerGeo = new THREE.BufferGeometry();
                 visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
@@ -1093,9 +1112,11 @@ async function init() {
     optionsMenu = createOptionsMenu();
     scoreboard = createScoreboard();
     pinHUD = createPinHUD();
-    // debugDisplay = createDebugDisplay();
-    // scene.add(debugDisplay);
-    // debugDisplay.visible = false; // Initially hidden
+    if (showButtons) {
+        debugDisplay = createDebugDisplay();
+        scene.add(debugDisplay);
+        debugDisplay.visible = false; // Initially hidden
+    }
 
     placementMatrix = new THREE.Matrix4();
     
