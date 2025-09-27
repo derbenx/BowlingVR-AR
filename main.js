@@ -1,3 +1,4 @@
+// BUTTONS [ trigger:0, grip:1, stick: 3, A/X: 4, B/Y: 5, options: 12 ]
 const dbg = 0;
 
 import * as THREE from 'three';
@@ -43,97 +44,91 @@ let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
 let allPinsFallen = false;
-let exitConfirmationActive = false;
-let exitConfirmationMesh = null;
-let exitConfirmationTimer = null;
+let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = false;
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
+let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
+let isBallThrown = false;
+let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
 let controllerWantsToHold = null;
-let visdb=0;//debug stuff
+let showCollision=0;//debug stuff
+let showButtons = 0;
 let laneCollisionVisualizer = null;
-
-function updateButtonAppearance(button, hovered) {
-    if (!button) return;
-    const context = button.userData.context;
-    const canvas = button.userData.canvas;
-    const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
-
-    // Button style
-    context.fillStyle = hovered ? '#666' : '#444'; // Highlight color
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.strokeStyle = hovered ? '#FFF' : '#888'; // Highlight border
-    context.lineWidth = 10;
-    context.strokeRect(0, 0, canvas.width, canvas.height);
-
-    context.fillStyle = 'white';
-    context.font = 'bold 40px sans-serif';
-    context.textAlign = 'center';
-    context.textBaseline = 'middle';
-    context.fillText(text, canvas.width / 2, canvas.height / 2);
-
-    button.material.map.needsUpdate = true;
-}
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
     menu.name = "optionsMenu";
-    menu.userData.buttons = []; // Initialize a dedicated array for buttons
+    menu.userData.buttons = [];
 
-    // Create background panel
     const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
     const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
     const panel = new THREE.Mesh(panelGeo, panelMat);
     menu.add(panel);
 
-    // Function to create a button with text
+    const updateButtonAppearance = (button, selected) => {
+        const context = button.userData.context;
+        const canvas = button.userData.canvas;
+        const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+        context.fillStyle = '#444';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.lineWidth = 10;
+        context.strokeRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'white';
+        context.font = 'bold 40px sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(text, canvas.width / 2, canvas.height / 2);
+        button.material.map.needsUpdate = true;
+    };
+
     function createButton(text, yPos, mode) {
         const canvas = document.createElement('canvas');
         canvas.width = 512;
         canvas.height = 128;
         const context = canvas.getContext('2d');
-
         const texture = new THREE.CanvasTexture(canvas);
         const geometry = new THREE.PlaneGeometry(0.5, 0.15);
         const material = new THREE.MeshBasicMaterial({ map: texture });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.position.y = yPos;
-        mesh.position.z = 0.01; // Add a small offset to prevent Z-fighting
+        mesh.position.z = 0.01;
         mesh.name = `button_${mode}`;
-        mesh.userData.mode = mode; // Store the mode for identification
+        mesh.userData.mode = mode;
         mesh.userData.isButton = true;
         mesh.userData.canvas = canvas;
         mesh.userData.context = context;
-
-        updateButtonAppearance(mesh, false); // Initial draw
-
+        updateButtonAppearance(mesh, false);
         return mesh;
     }
 
-    // Create buttons
     const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
     const scoringButton = createButton('Scoring', -0.1, 'scoring');
-
     menu.add(freePlayButton);
     menu.add(scoringButton);
+    menu.userData.buttons.push(freePlayButton);
+    menu.userData.buttons.push(scoringButton);
 
-    // Add buttons to the dedicated array, ensuring correct order
-    menu.userData.buttons.push(freePlayButton); // index 0
-    menu.userData.buttons.push(scoringButton); // index 1
+    menu.userData.update = () => {
+        menu.userData.buttons.forEach((btn, index) => {
+            updateButtonAppearance(btn, index === selectedMenuIndex);
+        });
+    };
 
-    menu.visible = false; // Initially hidden
+    menu.visible = false;
     scene.add(menu);
     return menu;
 }
@@ -147,7 +142,7 @@ function updateGameModeUI() {
                 scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
             }
             scoreboard.visible = true;
-            resetScoreboard(); // Load placeholder data and draw
+            startNewGame();
         }
     } else { // 'freeplay'
         if (scoreboard) {
@@ -252,33 +247,241 @@ function drawScoreboard() {
     scoreboard.material.map.needsUpdate = true;
 }
 
-function resetScoreboard() {
-    // This is placeholder data to test the display logic.
-    scoreData = [
-        { rolls: ['7', '2'], frameScore: '9' },
-        { rolls: ['9', '/'], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '19' },
-        { rolls: ['8', '1'], frameScore: '9' },
-        { rolls: ['X', ''], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '20' },
-        { rolls: ['X', ''], frameScore: '29' },
-        { rolls: ['9', '0'], frameScore: '9' },
-        { rolls: ['8', '/'], frameScore: '20' },
-        { rolls: ['X', 'X', 'X'], frameScore: '30' }
-    ];
+function startNewGame() {
+    // Ensure any open dialogs like "Play Again?" are closed.
+    dismissConfirmationDialog();
 
-    // // This is the code for a clean, empty scoreboard.
-    // scoreData = [];
-    // for (let i = 0; i < 10; i++) {
-    //     scoreData.push({
-    //         rolls: i < 9 ? ['', ''] : ['', '', ''],
-    //         frameScore: ''
-    //     });
-    // }
+    // This is the code for a clean, empty scoreboard.
+    scoreData = [];
+    for (let i = 0; i < 10; i++) {
+        scoreData.push({
+            rolls: i < 9 ? ['', ''] : ['', '', ''],
+            frameScore: ''
+        });
+    }
     currentFrame = 0;
     currentRoll = 0;
     isGameOver = false;
+    pinsDownLastRoll = 0;
+
+    // We need to make sure pins are reset when a new scoring game starts
+    if (world) { // Check if physics world is ready
+        resetPins();
+    }
+
     drawScoreboard();
+}
+
+function calculateScores() {
+    let cumulativeScore = 0;
+
+    // Helper to get the numeric value of a single roll
+    const getRollValue = (frame, roll) => {
+        const rollStr = scoreData[frame].rolls[roll];
+        if (rollStr === '') return null;
+        if (rollStr === 'X') return 10;
+        // For a spare, its value is 10 minus the previous roll in that frame.
+        if (rollStr === '/') return 10 - parseInt(scoreData[frame].rolls[roll - 1]);
+        return parseInt(rollStr);
+    };
+
+    // --- Frames 1-9 ---
+    for (let i = 0; i < 9; i++) {
+        if (scoreData[i].rolls[0] === '') {
+            scoreData[i].frameScore = '';
+            continue;
+        }
+
+        let frameScore = 0;
+        const isStrike = scoreData[i].rolls[0] === 'X';
+        const isSpare = scoreData[i].rolls[1] === '/';
+
+        if (isStrike) {
+            const nextRoll = getRollValue(i + 1, 0);
+            let secondNextRoll;
+            if (nextRoll === 10) { // Followed by another strike
+                // Look ahead to the frame after that, or the 2nd roll of the 10th frame
+                secondNextRoll = (i < 8) ? getRollValue(i + 2, 0) : getRollValue(9, 1);
+            } else { // Not a double
+                secondNextRoll = getRollValue(i + 1, 1);
+            }
+
+            if (nextRoll === null || secondNextRoll === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = 10 + nextRoll + secondNextRoll;
+
+        } else if (isSpare) {
+            const nextRoll = getRollValue(i + 1, 0);
+            if (nextRoll === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = 10 + nextRoll;
+
+        } else { // Open frame
+            const roll1 = getRollValue(i, 0);
+            const roll2 = getRollValue(i, 1);
+            if (roll1 === null || roll2 === null) {
+                scoreData[i].frameScore = ''; continue;
+            }
+            frameScore = roll1 + roll2;
+        }
+
+        cumulativeScore += frameScore;
+        scoreData[i].frameScore = cumulativeScore.toString();
+    }
+
+    // --- Frame 10 ---
+    const frame10 = scoreData[9];
+    if (frame10.rolls[0] !== '') {
+        const roll1Val = getRollValue(9, 0);
+        if (roll1Val === null) {
+            frame10.frameScore = '';
+            return;
+        }
+
+        const roll2Val = getRollValue(9, 1);
+        if (roll2Val === null) {
+            frame10.frameScore = '';
+            return;
+        }
+
+        let frameScore = 0;
+        const isStrike = roll1Val === 10;
+        const isSpare = !isStrike && (roll1Val + roll2Val === 10);
+
+        if (isStrike || isSpare) {
+            const roll3Val = getRollValue(9, 2);
+            if (roll3Val !== null) {
+                frameScore = roll1Val + roll2Val + roll3Val;
+                cumulativeScore += frameScore;
+                frame10.frameScore = cumulativeScore.toString();
+            } else {
+                frame10.frameScore = ''; // Waiting for third roll
+            }
+        } else {
+            // Open 10th frame, no third roll
+            frameScore = roll1Val + roll2Val;
+            cumulativeScore += frameScore;
+            frame10.frameScore = cumulativeScore.toString();
+        }
+    } else {
+        frame10.frameScore = '';
+    }
+}
+
+function processStandardFrameRoll(fallenPins, fallenThisRoll) {
+    if (currentRoll === 0) { // First roll
+        if (fallenPins.length === 10) { // Strike
+            scoreData[currentFrame].rolls[0] = 'X';
+            currentFrame++;
+            pinsDownLastRoll = 0;
+            resetPins();
+        } else {
+            scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
+            pinsDownLastRoll = fallenPins.length;
+            currentRoll++;
+            clearFallenPins();
+        }
+    } else { // Second roll
+        if (fallenPins.length === 10) { // Spare
+            scoreData[currentFrame].rolls[1] = '/';
+        } else {
+            scoreData[currentFrame].rolls[1] = fallenThisRoll.toString();
+        }
+        currentFrame++;
+        currentRoll = 0;
+        pinsDownLastRoll = 0;
+        resetPins();
+    }
+}
+
+function processTenthFrameRoll(fallenPins, fallenThisRoll) {
+    const frame = scoreData[9];
+
+    if (currentRoll === 0) { // First roll
+        frame.rolls[0] = fallenThisRoll === 10 ? 'X' : fallenThisRoll.toString();
+        if (fallenThisRoll === 10) { // Strike
+            resetPins();
+            pinsDownLastRoll = 0;
+        } else {
+            clearFallenPins();
+            pinsDownLastRoll = fallenPins.length;
+        }
+        currentRoll++;
+    } else if (currentRoll === 1) { // Second roll
+        const firstRollWasStrike = frame.rolls[0] === 'X';
+
+        if (firstRollWasStrike) {
+            // This is the first bonus ball after a strike. Rack was full.
+            const pinsThisThrow = fallenPins.length;
+            frame.rolls[1] = pinsThisThrow === 10 ? 'X' : pinsThisThrow.toString();
+            if (pinsThisThrow === 10) { // Second strike
+                resetPins();
+                pinsDownLastRoll = 0;
+            } else {
+                clearFallenPins();
+                pinsDownLastRoll = fallenPins.length;
+            }
+        } else {
+            // This is the second ball of a standard frame.
+            if (fallenPins.length === 10) { // Spare
+                frame.rolls[1] = '/';
+                resetPins(); // Reset for bonus ball
+                pinsDownLastRoll = 0;
+            } else { // Open frame
+                frame.rolls[1] = fallenThisRoll.toString();
+                isGameOver = true; // Game over, no third roll
+            }
+        }
+        // If we're not game over, we advance to the third roll
+        if (!isGameOver) {
+            currentRoll++;
+        }
+    } else if (currentRoll === 2) { // Third roll (bonus ball)
+        const firstRollWasStrike = frame.rolls[0] === 'X';
+        const secondRollWasStrike = frame.rolls[1] === 'X';
+
+        if (firstRollWasStrike && secondRollWasStrike) {
+            // Third strike in a row. Rack was full.
+            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
+        } else if (firstRollWasStrike) {
+            // First was strike, second was not. Partial rack.
+            frame.rolls[2] = fallenPins.length === 10 ? '/' : fallenThisRoll.toString();
+        } else {
+            // First was not strike, second was a spare. Rack is full.
+            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
+        }
+        isGameOver = true;
+    }
+}
+
+function processRoll() {
+    if (isGameOver) return;
+
+    const fallenPins = getFallenPins();
+    const fallenThisRoll = fallenPins.length - pinsDownLastRoll;
+
+    if (currentFrame === 9) {
+        processTenthFrameRoll(fallenPins, fallenThisRoll);
+    } else {
+        processStandardFrameRoll(fallenPins, fallenThisRoll);
+    }
+
+    calculateScores();
+    drawScoreboard();
+
+    if (isGameOver) {
+        activeConfirmationDialog = createConfirmationDialog(
+            'Game Over! Play Again?',
+            [
+                { text: 'No', action: 'dismiss' },
+                { text: 'Yes', action: 'startNewGame' }
+            ],
+            renderer
+        );
+        scene.add(activeConfirmationDialog);
+    }
 }
 
 function createPinHUD() {
@@ -334,8 +537,8 @@ function drawPinHUD() {
 
     pinLayout.forEach((pos, index) => {
         let isStanding = false;
-        if (pins[index]) {
-            const pin = pins[index];
+        const pin = pins.find(p => p.pinId === index); // Find pin by its unique ID
+        if (pin) {
             const up = new THREE.Vector3(0, 1, 0);
             const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
             const pinUp = up.clone().applyQuaternion(quaternion);
@@ -415,32 +618,41 @@ async function main() {
     document.body.appendChild(arButton);
 
     renderer.xr.addEventListener('sessionstart', () => {
-        let fY = 0;
-        const checkFloor = setInterval(() => {
-            if (planes.children.length > 0) {
-                for (const planeMesh of planes.children) {
-                    fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-                }
-                clearInterval(checkFloor);
-                fY_floor = fY;
-                placeScene(fY, loader, world, dynamicObjects);
-                updateGameModeUI();
+        const setupScene = async () => {
+            let fY = 0;
+            // Wait for a plane to be detected
+            await new Promise(resolve => {
+                const checkFloor = setInterval(() => {
+                    if (planes.children.length > 0) {
+                        for (const planeMesh of planes.children) {
+                            fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+                        }
+                        clearInterval(checkFloor);
+                        resolve();
+                    }
+                }, 150);
+            });
 
-                // // Position and show the debug display once the world is set up
-                // if (debugDisplay) {
-                //     const cameraPosition = new THREE.Vector3();
-                //     camera.getWorldPosition(cameraPosition);
-                //     const cameraQuaternion = new THREE.Quaternion();
-                //     camera.getWorldQuaternion(cameraQuaternion);
-                //     const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+            fY_floor = fY;
+            await placeScene(fY, loader, world, dynamicObjects); // Await the async function
+            updateGameModeUI(); // Now this runs after placeScene is complete
 
-                //     debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                //     debugDisplay.position.y += 0.5; // Place it a bit higher
-                //     debugDisplay.quaternion.copy(cameraQuaternion);
-                //     debugDisplay.visible = true;
-                // }
+            // Position and show the debug display once the world is set up
+            if (showButtons && debugDisplay) {
+                const cameraPosition = new THREE.Vector3();
+                camera.getWorldPosition(cameraPosition);
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldQuaternion(cameraQuaternion);
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                debugDisplay.position.y += 0.5; // Place it a bit higher
+                debugDisplay.quaternion.copy(cameraQuaternion);
+                debugDisplay.visible = true;
             }
-        }, 150);
+        };
+
+        setupScene();
     });
 
     renderer.xr.addEventListener('sessionend', cleanupScene);
@@ -516,10 +728,28 @@ function animate(timestamp, frame) {
 
             if (fallenPins.length === pins.length && !allPinsFallen) {
                 allPinsFallen = true;
-                pinsFallenResetTimer = setTimeout(() => {
-                    resetPins();
-                    pinsFallenResetTimer = null;
-                }, 4000);
+                // In scoring mode, roll completion handles reset. In freeplay, use a timer.
+                if (gameMode === 'freeplay') {
+                    pinsFallenResetTimer = setTimeout(() => {
+                        resetPins();
+                        pinsFallenResetTimer = null;
+                    }, 4000);
+                }
+            }
+        }
+
+        // --- SCORING LOGIC: Roll Completion Detection ---
+        if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (ball) {
+                const isSleeping = ball.body.isSleeping();
+                const ballLocation = getBallLocationState();
+                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+
+                if (isSleeping || isOutOfPlay) {
+                    isBallThrown = false; // Prevent this from running again until next throw
+                    processRoll();
+                }
             }
         }
 
@@ -548,101 +778,196 @@ function animate(timestamp, frame) {
             controller.userData.lastQuaternion.copy(currentQuaternion);
 
             if (controller && controller.gamepad) {
+                const dialogOpen = (optionsMenu && optionsMenu.visible) || activeConfirmationDialog;
 
-                // Handle floor height adjustment with grip and thumbstick
-                const ballLocation = getBallLocationState();
-                const canAdjust = ballLocation !== 'lane';
-
-                if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
-                    // On initial press, freeze the pins
-                    if (!gripButtonState[i]) {
-                        gripButtonState[i] = true;
-                        const pins = dynamicObjects.filter(obj => obj.isPin);
-                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
-                    }
-
-                    const thumbstickY = controller.gamepad.axes[3];
-                    if (Math.abs(thumbstickY) > 0.1) {
-                        const yDelta = thumbstickY * -0.01; // Adjust speed and direction
-                        floorOffset += yDelta;
-                        updateFloorAndLanePosition(yDelta);
-
-                        // Clear any existing timer
-                        if (floorOffsetSaveTimer) {
-                            clearTimeout(floorOffsetSaveTimer);
+                // --- DIALOG INPUT HANDLING ---
+                if (dialogOpen) {
+                    // --- Generic Confirmation Dialog ---
+                    if (activeConfirmationDialog) {
+                        const dialog = activeConfirmationDialog;
+                        // Navigation with thumbsticks
+                        const thumbstickX = controller.gamepad.axes[2];
+                        if (thumbstickX < -0.5 && thumbstickXState[i] !== -1) { // Left
+                            thumbstickXState[i] = -1;
+                            dialog.userData.selectedIndex = Math.max(0, dialog.userData.selectedIndex - 1);
+                            dialog.userData.update();
+                        } else if (thumbstickX > 0.5 && thumbstickXState[i] !== 1) { // Right
+                            thumbstickXState[i] = 1;
+                            dialog.userData.selectedIndex = Math.min(dialog.userData.buttons.length - 1, dialog.userData.selectedIndex + 1);
+                            dialog.userData.update();
+                        } else if (Math.abs(thumbstickX) < 0.2) { // Neutral
+                            thumbstickXState[i] = 0;
                         }
 
-                        // Set a new timer to save after 2 minutes of inactivity
-                        floorOffsetSaveTimer = setTimeout(() => {
-                            localStorage.setItem('floorOffset', floorOffset);
-                            floorOffsetSaveTimer = null;
-                        }, 120000); // 2 minutes
+                        // Confirm with A/X/Trigger
+                        const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
+                        if (confirmButtonPressed) {
+                            if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
+                            if (controller.gamepad.buttons[4].pressed) resetButtonState[i] = true;
+
+                            const selectedButton = dialog.userData.buttons[dialog.userData.selectedIndex];
+                            const action = selectedButton.userData.action;
+
+                            switch (action) {
+                                case 'dismiss':
+                                    activeConfirmationDialog.userData.dismiss();
+                                    break;
+                                case 'exit':
+                                    renderer.xr.getSession().end();
+                                    break;
+                                case 'reset':
+                                    resetPins();
+                                    activeConfirmationDialog.userData.dismiss();
+                                    break;
+                                case 'startNewGame':
+                                    startNewGame();
+                                    activeConfirmationDialog.userData.dismiss();
+                                    break;
+                            }
+                        }
+
+                        // Cancel with B/Y
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            activeConfirmationDialog.userData.dismiss();
+                        }
                     }
-                } else if (gripButtonState[i]) {
-                    // On release, unfreeze the pins
-                    gripButtonState[i] = false;
-                    const pins = dynamicObjects.filter(obj => obj.isPin);
-                    pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
-                }
 
-                // Handle B/Y button (index 5) for exiting
-                if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
-                    endSessionButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        // Second press: dismiss the UI first, then end the session
-                        dismissExitConfirmation();
-                        renderer.xr.getSession().end();
-                    } else {
-                        // First press: show confirmation
-                        exitConfirmationActive = true;
-                        exitConfirmationMesh = createExitConfirmationMesh();
+                    // --- Options Menu Dialog ---
+                    if (optionsMenu && optionsMenu.visible) {
+                        const buttons = optionsMenu.userData.buttons;
+                        // Navigation with thumbsticks (either controller)
+                        const thumbstickY = controller.gamepad.axes[3];
+                        if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
+                            thumbstickYState[i] = -1;
+                            const oldIndex = selectedMenuIndex;
+                            selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
+                            if (oldIndex !== selectedMenuIndex) {
+                                optionsMenu.userData.update();
+                            }
+                        } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
+                            thumbstickYState[i] = 1;
+                            const oldIndex = selectedMenuIndex;
+                            selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
+                            if (oldIndex !== selectedMenuIndex) {
+                                optionsMenu.userData.update();
+                            }
+                        } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
+                            thumbstickYState[i] = 0;
+                        }
 
-                        // Position the exit menu in world space
-                        const cameraPosition = new THREE.Vector3();
-                        camera.getWorldPosition(cameraPosition);
-                        const cameraQuaternion = new THREE.Quaternion();
-                        camera.getWorldQuaternion(cameraQuaternion);
-                        const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                        exitConfirmationMesh.position.copy(cameraPosition).add(forward.multiplyScalar(2));
-                        exitConfirmationMesh.quaternion.copy(cameraQuaternion);
+                        // Confirm selection with A/X/Trigger (buttons 0, 4)
+                        const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
+                        if (confirmButtonPressed) {
+                            if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
+                            if (controller.gamepad.buttons[4].pressed) resetButtonState[i] = true;
 
-                        scene.add(exitConfirmationMesh);
+                            const selectedButton = buttons[selectedMenuIndex];
+                            if (selectedButton) {
+                                gameMode = selectedButton.userData.mode;
+                                localStorage.setItem('gameMode', gameMode);
+                                optionsMenu.visible = false;
+                                updateGameModeUI();
+                            }
+                        }
 
-                        // Auto-dismiss after 5 seconds
-                        exitConfirmationTimer = setTimeout(dismissExitConfirmation, 5000);
+                        // Cancel with B/Y (button 5)
+                        if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                            endSessionButtonState[i] = true;
+                            optionsMenu.visible = false; // Just close it
+                        }
                     }
-                } else if (!controller.gamepad.buttons[5].pressed) {
-                    endSessionButtonState[i] = false; // Mark as released
-                }
 
-                // Handle A/X button (index 4) for resetting pins or dismissing confirmation
-                if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
-                    resetButtonState[i] = true; // Mark as pressed
-                    if (exitConfirmationActive) {
-                        dismissExitConfirmation();
-                    } else {
-                        resetPins();
+                    // Handle button release states for dialog controls
+                    if (!controller.gamepad.buttons[0].pressed) triggerState[i] = false;
+                    if (!controller.gamepad.buttons[4].pressed) resetButtonState[i] = false;
+                    if (!controller.gamepad.buttons[5].pressed) endSessionButtonState[i] = false;
+                    if (Math.abs(controller.gamepad.axes[2]) < 0.2) thumbstickXState[i] = 0;
+
+                }
+                // --- DEFAULT GAME INPUT HANDLING ---
+                else {
+                    // Handle floor height adjustment with grip and thumbstick
+                    const ballLocation = getBallLocationState();
+                    const canAdjust = ballLocation !== 'lane';
+
+                    if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
+                        if (!gripButtonState[i]) {
+                            gripButtonState[i] = true;
+                            const pins = dynamicObjects.filter(obj => obj.isPin);
+                            pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased));
+                        }
+
+                        const thumbstickY = controller.gamepad.axes[3];
+                        if (Math.abs(thumbstickY) > 0.1) {
+                            const yDelta = thumbstickY * -0.01;
+                            floorOffset += yDelta;
+                            updateFloorAndLanePosition(yDelta);
+                            if (floorOffsetSaveTimer) clearTimeout(floorOffsetSaveTimer);
+                            floorOffsetSaveTimer = setTimeout(() => {
+                                localStorage.setItem('floorOffset', floorOffset);
+                                floorOffsetSaveTimer = null;
+                            }, 120000);
+                        }
+                    } else if (gripButtonState[i]) {
+                        gripButtonState[i] = false;
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        pins.forEach(pin => pin.body.setBodyType(RAPIER.RigidBodyType.Dynamic));
                     }
-                } else if (!controller.gamepad.buttons[4].pressed) {
-                    resetButtonState[i] = false; // Mark as released
+
+                    // Handle B/Y button (index 5) for initiating exit
+                    if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
+                        endSessionButtonState[i] = true;
+
+                        activeConfirmationDialog = createConfirmationDialog(
+                            'Exit Game?',
+                            [
+                                { text: 'No', action: 'dismiss' },
+                                { text: 'Yes', action: 'exit' }
+                            ],
+                            renderer
+                        );
+                        scene.add(activeConfirmationDialog);
+
+                    } else if (!controller.gamepad.buttons[5].pressed) {
+                        endSessionButtonState[i] = false;
+                    }
+
+                    // Handle A/X button (index 4) for initiating a reset
+                    if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
+                        resetButtonState[i] = true;
+
+                        if (gameMode === 'scoring') {
+                            activeConfirmationDialog = createConfirmationDialog(
+                                'Reset the game?',
+                                [
+                                    { text: 'No', action: 'dismiss' },
+                                    { text: 'Yes', action: 'reset' }
+                                ],
+                                renderer
+                            );
+                            scene.add(activeConfirmationDialog);
+                        } else { // freeplay mode
+                            resetPins();
+                        }
+
+                    } else if (!controller.gamepad.buttons[4].pressed) {
+                        resetButtonState[i] = false;
+                    }
                 }
 
-                // Also dismiss on trigger press (index 0)
-                if (exitConfirmationActive && controller.gamepad.buttons[0].pressed) {
-                    dismissExitConfirmation();
+                // --- UNIVERSAL INPUT HANDLING ---
+                // Update debug display for the left controller
+                if (showButtons && i === 0) {
+                    updateDebugDisplay(controller.gamepad);
                 }
-
-                // // Update debug display for the left controller
-                // if (i === 0) {
-                //     updateDebugDisplay(controller.gamepad);
-                // }
 
                 // Handle options menu toggle (left controller, options button is 12)
                 if (i === 0) { // Left controller
                     if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
-                            // If menu is currently visible, it's about to be hidden. Save the state.
+                            // If menu is already visible, this press is a CONFIRM action
                             if (optionsMenu.visible) {
                                 const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
                                 if (selectedButton) {
@@ -650,12 +975,16 @@ function animate(timestamp, frame) {
                                     localStorage.setItem('gameMode', gameMode);
                                     updateGameModeUI();
                                 }
-                            }
+                                optionsMenu.visible = false;
+                            } else {
+                                // If menu is not visible, this press OPENS it
+                                optionsMenu.visible = true;
 
-                            optionsMenu.visible = !optionsMenu.visible;
+                                // Find index of current game mode and set it as selected
+                                const currentModeIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
+                                selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
+                                optionsMenu.userData.update();
 
-                            // If it was just made visible, position it.
-                            if (optionsMenu.visible) {
                                 const cameraPosition = new THREE.Vector3();
                                 camera.getWorldPosition(cameraPosition);
                                 const cameraQuaternion = new THREE.Quaternion();
@@ -671,62 +1000,21 @@ function animate(timestamp, frame) {
                 }
 
                 // Handle Pin HUD toggle (left controller, thumbstick press is 3)
-                if (i === 0) {
+                if (i === 0) { // Left controller
                     if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
                         hudButtonState = true;
                         if (pinHUD) {
                             pinHUD.visible = !pinHUD.visible;
                             if (pinHUD.visible && laneObject) {
-                                // Position the HUD above where the scoreboard would be
                                 const lanePosition = laneObject.mesh.position;
                                 pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
                                 if (scoreboard) {
-                                    pinHUD.quaternion.copy(scoreboard.quaternion); // Match orientation
+                                    pinHUD.quaternion.copy(scoreboard.quaternion);
                                 }
                             }
                         }
                     } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
                         hudButtonState = false;
-                    }
-                }
-
-                // Handle menu navigation and selection
-                if (optionsMenu && optionsMenu.visible) {
-                    const buttons = optionsMenu.userData.buttons;
-                    // Navigation with thumbsticks (either controller)
-                    const thumbstickY = controller.gamepad.axes[3];
-                    if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
-                        thumbstickYState[i] = -1;
-                        const oldIndex = selectedMenuIndex;
-                        selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
-                        if (oldIndex !== selectedMenuIndex) {
-                            updateButtonAppearance(buttons[oldIndex], false);
-                            updateButtonAppearance(buttons[selectedMenuIndex], true);
-                        }
-                    } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
-                        thumbstickYState[i] = 1;
-                        const oldIndex = selectedMenuIndex;
-                        selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
-                        if (oldIndex !== selectedMenuIndex) {
-                            updateButtonAppearance(buttons[oldIndex], false);
-                            updateButtonAppearance(buttons[selectedMenuIndex], true);
-                        }
-                    } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
-                        thumbstickYState[i] = 0;
-                    }
-
-                    // Selection with trigger (either controller)
-                    if (controller.gamepad.buttons[0].pressed && !triggerState[i]) {
-                        triggerState[i] = true;
-                        const selectedButton = buttons[selectedMenuIndex];
-                        if (selectedButton) {
-                            gameMode = selectedButton.userData.mode;
-                            localStorage.setItem('gameMode', gameMode);
-                            optionsMenu.visible = false;
-                            updateGameModeUI();
-                        }
-                    } else if (!controller.gamepad.buttons[0].pressed) {
-                        triggerState[i] = false;
                     }
                 }
             }
@@ -774,7 +1062,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
             world.createCollider(trimeshDesc, laneBody);
 
-            if (visdb){
+            if (showCollision){
                 // Create and add the visualizer mesh
                 const visualizerGeo = new THREE.BufferGeometry();
                 visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
@@ -857,14 +1145,16 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 }
 
 function createPins(fY) {
-    function createPin(x, z) {
+    let pinIdCounter = 0;
+
+    function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true });
+        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -876,12 +1166,18 @@ function createPins(fY) {
         for (let i = 0; i < row + 1; i++) {
             const x = (i - row / 2) * pinSpacing * 2;
             const z = pinStartZ - row * pinSpacing * 1.732;
-            createPin(x, z);
+            createPin(x, z, pinIdCounter++);
         }
     }
 }
 
 function clearFallenPins() {
+    // This function correctly removes fallen pins from the simulation.
+    // 1. It gets a list of fallen pins.
+    // 2. It removes the visual mesh from the Three.js scene.
+    // 3. It removes the physics body from the Rapier world.
+    // 4. It filters the pin object out of the master dynamicObjects array,
+    //    ensuring it's gone from all future physics steps and lookups.
     const fallenPins = getFallenPins();
     if (fallenPins.length > 0) {
         for (const pin of fallenPins) {
@@ -912,7 +1208,8 @@ function getFallenPins() {
 }
 
 function resetPins() {
-    dismissExitConfirmation();
+    // The confirmation dialog is dismissed by the input handler that calls this.
+    // No need to dismiss it here.
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
@@ -955,42 +1252,108 @@ function getBallLocationState() {
     }
 }
 
-function dismissExitConfirmation() {
-    if (exitConfirmationMesh) {
-        scene.remove(exitConfirmationMesh);
-        exitConfirmationMesh = null;
-    }
-    exitConfirmationActive = false;
-    if (exitConfirmationTimer) {
-        clearTimeout(exitConfirmationTimer);
-        exitConfirmationTimer = null;
-    }
-}
 
+function createConfirmationDialog(title, buttons, renderer) {
+    const dialog = new THREE.Group();
+    dialog.name = "confirmationDialog";
+    dialog.userData.buttons = [];
+    dialog.userData.selectedIndex = 0; // Default to the first button ("No")
 
-function createExitConfirmationMesh() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 512;
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
+    // Background panel
+    const panelGeo = new THREE.PlaneGeometry(0.8, 0.4);
+    const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
+    const panel = new THREE.Mesh(panelGeo, panelMat);
+    dialog.add(panel);
 
-    context.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    // Title text
+    const titleCanvas = document.createElement('canvas');
+    titleCanvas.width = 512;
+    titleCanvas.height = 128;
+    const titleContext = titleCanvas.getContext('2d');
+    titleContext.fillStyle = 'white';
+    titleContext.font = 'bold 40px sans-serif';
+    titleContext.textAlign = 'center';
+    titleContext.textBaseline = 'middle';
+    titleContext.fillText(title, titleCanvas.width / 2, titleCanvas.height / 2);
+    const titleTexture = new THREE.CanvasTexture(titleCanvas);
+    const titleGeo = new THREE.PlaneGeometry(0.7, 0.1);
+    const titleMat = new THREE.MeshBasicMaterial({ map: titleTexture, transparent: true });
+    const titleMesh = new THREE.Mesh(titleGeo, titleMat);
+    titleMesh.position.y = 0.1;
+    titleMesh.position.z = 0.01;
+    dialog.add(titleMesh);
 
-    context.fillStyle = 'white';
-    context.font = '30px sans-serif';
-    context.textAlign = 'center';
-    context.fillText('Press B/Y again to exit.', canvas.width / 2, canvas.height / 2 - 20);
-    context.fillText('Any other key to close this.', canvas.width / 2, canvas.height / 2 + 20);
+    // Function to draw a single button
+    const updateButtonAppearance = (button, selected) => {
+        const context = button.userData.context;
+        const canvas = button.userData.canvas;
+        context.fillStyle = '#444';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.lineWidth = 10;
+        context.strokeRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = 'white';
+        context.font = 'bold 40px sans-serif';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(button.userData.text, canvas.width / 2, canvas.height / 2);
+        button.material.map.needsUpdate = true;
+    };
 
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
+    // Create and position buttons
+    const totalWidth = (buttons.length - 1) * 0.3;
+    const startX = -totalWidth / 2;
 
-    const geometry = new THREE.PlaneGeometry(1, 0.5);
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-    const mesh = new THREE.Mesh(geometry, material);
+    buttons.forEach((btn, index) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
 
-    return mesh;
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.25, 0.15);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.x = startX + index * 0.3;
+        mesh.position.y = -0.1;
+        mesh.position.z = 0.01;
+        mesh.userData = {
+            ...btn,
+            isButton: true,
+            canvas: canvas,
+            context: context,
+        };
+
+        dialog.userData.buttons.push(mesh);
+        dialog.add(mesh);
+
+        updateButtonAppearance(mesh, index === dialog.userData.selectedIndex);
+    });
+
+    // Add an update method to the dialog itself
+    dialog.userData.update = () => {
+        dialog.userData.buttons.forEach((btn, index) => {
+            updateButtonAppearance(btn, index === dialog.userData.selectedIndex);
+        });
+    };
+
+    // Add a dismiss method
+    dialog.userData.dismiss = () => {
+        scene.remove(dialog);
+        activeConfirmationDialog = null;
+    };
+
+    // Position the dialog in front of the camera
+    const camera = renderer.xr.getCamera();
+    const cameraPosition = new THREE.Vector3();
+    camera.getWorldPosition(cameraPosition);
+    const cameraQuaternion = new THREE.Quaternion();
+    camera.getWorldQuaternion(cameraQuaternion);
+    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+    dialog.position.copy(cameraPosition).add(forward.multiplyScalar(2));
+    dialog.quaternion.copy(cameraQuaternion);
+
+    return dialog;
 }
 
 function updateFloorAndLanePosition(yDelta = 0) {
@@ -1035,7 +1398,9 @@ function setLanePosition(position) {
 
 function cleanupScene() {
     // Dismiss any active UI
-    dismissExitConfirmation();
+    if (activeConfirmationDialog) {
+        activeConfirmationDialog.userData.dismiss();
+    }
 
     // Clear any pending timers
     if (pinsFallenResetTimer) {
@@ -1086,9 +1451,11 @@ async function init() {
     optionsMenu = createOptionsMenu();
     scoreboard = createScoreboard();
     pinHUD = createPinHUD();
-    // debugDisplay = createDebugDisplay();
-    // scene.add(debugDisplay);
-    // debugDisplay.visible = false; // Initially hidden
+    if (showButtons) {
+        debugDisplay = createDebugDisplay();
+        scene.add(debugDisplay);
+        debugDisplay.visible = false; // Initially hidden
+    }
 
     placementMatrix = new THREE.Matrix4();
     
@@ -1133,6 +1500,7 @@ async function init() {
 
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
+                isBallThrown = true;
             }
             holdingController = null;
         }
