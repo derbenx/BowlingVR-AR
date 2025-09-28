@@ -1015,23 +1015,21 @@ function animate(timestamp, frame) {
                     }
                 }
 
-                // Handle Pin HUD toggle (left controller, thumbstick press is 3)
-                if (i === 0) { // Left controller
-                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
-                        hudButtonState = true;
-                        if (pinHUD) {
-                            pinHUD.visible = !pinHUD.visible;
-                            if (pinHUD.visible && laneObject) {
-                                const lanePosition = laneObject.mesh.position;
-                                pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
-                                if (scoreboard) {
-                                    pinHUD.quaternion.copy(scoreboard.quaternion);
-                                }
+                // Handle Pin HUD toggle (either controller, thumbstick press is 3)
+                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
+                    hudButtonState = true;
+                    if (pinHUD) {
+                        pinHUD.visible = !pinHUD.visible;
+                        if (pinHUD.visible && laneObject) {
+                            const lanePosition = laneObject.mesh.position;
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                            if (scoreboard) {
+                                pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
                         }
-                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
-                        hudButtonState = false;
                     }
+                } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                    hudButtonState = false;
                 }
             }
         }
@@ -1329,7 +1327,7 @@ function createConfirmationDialog(title, buttons, renderer) {
     const titleMat = new THREE.MeshBasicMaterial({ map: titleTexture, transparent: true });
     const titleMesh = new THREE.Mesh(titleGeo, titleMat);
     titleMesh.position.y = 0.1;
-    titleMesh.position.z = 0.01;
+    titleMesh.position.z = 0.02; // Increased to prevent z-fighting with the panel
     dialog.add(titleMesh);
 
     // Function to draw a single button
@@ -1526,8 +1524,10 @@ async function init() {
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 if (!isMoving || isBelowLane) {
-                    // The trigger's only job is to pick up the ball. All game state logic
-                    // is now handled by the endTurn() function, which is called by a timer.
+                    // In freeplay mode, picking up the ball should clear the fallen pins.
+                    if (gameMode === 'freeplay') {
+                        clearFallenPins();
+                    }
 
                     // Set the collision group immediately to prevent collision on the next physics step.
                     ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
