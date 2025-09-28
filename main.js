@@ -197,7 +197,7 @@ function drawScoreboard() {
     ctx.fillStyle = 'white';
 
     // Draw the 10 frames + total box
-    let cumulativeTotal = 0;
+    let lastValidScore = '';
     for (let i = 0; i < 11; i++) {
         const x = startX + i * frameWidth;
 
@@ -213,7 +213,9 @@ function drawScoreboard() {
 
             // Frame score text
             const frameScore = scoreData[i].frameScore || '';
-            cumulativeTotal += parseInt(frameScore) || 0;
+            if (frameScore) {
+                lastValidScore = frameScore;
+            }
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -239,7 +241,7 @@ function drawScoreboard() {
             }
         } else { // Final "Total" box
             ctx.strokeRect(x, startY, frameWidth, frameHeight);
-            const totalScore = cumulativeTotal.toString();
+            const totalScore = lastValidScore;
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
