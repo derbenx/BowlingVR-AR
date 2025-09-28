@@ -253,11 +253,6 @@ function drawScoreboard() {
 }
 
 function startNewGame() {
-    // Ensure any open dialogs like "Play Again?" are closed.
-    if (activeConfirmationDialog) {
-        activeConfirmationDialog.userData.dismiss();
-    }
-
     // This is the code for a clean, empty scoreboard.
     scoreData = [];
     for (let i = 0; i < 10; i++) {
