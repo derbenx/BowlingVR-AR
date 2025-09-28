@@ -3,6 +3,7 @@ const dbg = 0;
 
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { XRPlanes } from 'three/addons/webxr/XRPlanes.js';
@@ -611,6 +612,29 @@ async function main() {
 
     const loader = new GLTFLoader();
 
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches;
+
+    if (isPWA) {
+        // This is a PWA on Meta Quest, so we can autostart VR.
+        // The user clicking the PWA icon from the app library counts as the required user gesture.
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+              if (supported) {
+                navigator.xr.requestSession('immersive-vr', {
+                  optionalFeatures: ['local-floor','plane-detection'],
+                })
+                .then((session) => {renderer.xr.setSession(session);});
+              }
+            });
+        }
+    } else {
+        // This is not a PWA, so show the AR button for the standard web experience.
+        const arButton = ARButton.createButton(renderer, {
+            requiredFeatures: ['local-floor', 'plane-detection']
+        });
+        document.body.appendChild(arButton);
+    }
+
     renderer.xr.addEventListener('sessionstart', () => {
         const setupScene = async () => {
             let fY = 0;
@@ -654,19 +678,6 @@ async function main() {
     // Setup plane detection
     planes = new XRPlanes(renderer);
     //scene.add(planes);
-
-    if (window.getDigitalGoodsService !== undefined) {
-        if (navigator.xr && navigator.xr.isSessionSupported) {
-            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-              if (supported && navigator.xr.requestSession) {
-                navigator.xr.requestSession('immersive-vr', {
-                  optionalFeatures: ['local-floor','plane-detection'],
-                })
-                .then((session) => {renderer.xr.setSession(session);});
-              }
-            });
-          }
-    }
 
     init();
 }
