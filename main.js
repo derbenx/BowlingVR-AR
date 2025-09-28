@@ -383,13 +383,11 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
             scoreData[currentFrame].rolls[0] = 'X';
             currentFrame++;
             pinsDownLastRoll = 0;
-            resetPins();
+            currentRoll = 0; // Signals a new frame
         } else {
             scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
             pinsDownLastRoll = fallenPins.length;
             currentRoll++;
-            // On the first roll, we now wait for the player to pick up the ball
-            // before clearing the fallen pins. That is handled in onSelectStart.
         }
     } else { // Second roll
         if (fallenPins.length === 10) { // Spare
@@ -400,7 +398,6 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
         currentFrame++;
         currentRoll = 0;
         pinsDownLastRoll = 0;
-        resetPins();
     }
 }
 
@@ -409,40 +406,25 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 
     if (currentRoll === 0) { // First roll
         frame.rolls[0] = fallenThisRoll === 10 ? 'X' : fallenThisRoll.toString();
-        if (fallenThisRoll === 10) { // Strike
-            resetPins();
-            pinsDownLastRoll = 0;
-        } else {
-            clearFallenPins();
-            pinsDownLastRoll = fallenPins.length;
-        }
+        pinsDownLastRoll = fallenPins.length;
         currentRoll++;
     } else if (currentRoll === 1) { // Second roll
         const firstRollWasStrike = frame.rolls[0] === 'X';
 
         if (firstRollWasStrike) {
-            // This is the first bonus ball after a strike. Rack was full.
             const pinsThisThrow = fallenPins.length;
             frame.rolls[1] = pinsThisThrow === 10 ? 'X' : pinsThisThrow.toString();
-            if (pinsThisThrow === 10) { // Second strike
-                resetPins();
-                pinsDownLastRoll = 0;
-            } else {
-                clearFallenPins();
-                pinsDownLastRoll = fallenPins.length;
-            }
+            pinsDownLastRoll = fallenPins.length;
         } else {
-            // This is the second ball of a standard frame.
             if (fallenPins.length === 10) { // Spare
                 frame.rolls[1] = '/';
-                resetPins(); // Reset for bonus ball
-                pinsDownLastRoll = 0;
             } else { // Open frame
                 frame.rolls[1] = fallenThisRoll.toString();
                 isGameOver = true; // Game over, no third roll
             }
+            pinsDownLastRoll = fallenPins.length;
         }
-        // If we're not game over, we advance to the third roll
+
         if (!isGameOver) {
             currentRoll++;
         }
@@ -451,16 +433,42 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
         const secondRollWasStrike = frame.rolls[1] === 'X';
 
         if (firstRollWasStrike && secondRollWasStrike) {
-            // Third strike in a row. Rack was full.
             frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
         } else if (firstRollWasStrike) {
-            // First was strike, second was not. Partial rack.
             frame.rolls[2] = fallenPins.length === 10 ? '/' : fallenThisRoll.toString();
-        } else {
-            // First was not strike, second was a spare. Rack is full.
+        } else { // Spare on second roll
             frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
         }
         isGameOver = true;
+    }
+}
+
+function endTurn() {
+    // This is the new central function to manage the game state after a roll.
+    // 1. It processes the score.
+    // 2. It checks if the game is over.
+    // 3. It determines whether to do a full reset or just prepare for the next roll.
+
+    processRoll(); // Update scores first
+
+    if (isGameOver) {
+        // processRoll already handles the 'Game Over' dialog
+        return;
+    }
+
+    // After a strike or the second roll of a frame, processRoll sets currentRoll to 0.
+    // This is our cue for a full pin reset.
+    if (currentRoll === 0) {
+        resetPins();
+    }
+    // Otherwise, it was the first roll of a frame, so we just hide the fallen pins
+    // and reset the ball for the second shot.
+    else {
+        const fallenPins = getFallenPins();
+        for (const pin of fallenPins) {
+            pin.mesh.visible = false;
+        }
+        resetBall();
     }
 }
 
@@ -749,16 +757,12 @@ function animate(timestamp, frame) {
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // If the ball is sleeping on the lane, process the roll immediately.
-                if (isSleeping && !isOutOfPlay) {
-                    isBallThrown = false;
-                    processRoll();
-                }
-                // If the ball is out of play and no timer is running, start one.
-                else if (isOutOfPlay && !rollCompletionTimer) {
+                // If the ball has stopped or is out of play, and a timer isn't already running,
+                // start the end-of-turn timer.
+                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
+                    isBallThrown = false; // Prevent this from running again until next throw
                     rollCompletionTimer = setTimeout(() => {
-                        isBallThrown = false;
-                        processRoll();
+                        endTurn();
                         rollCompletionTimer = null;
                     }, 5000); // 5-second timer
                 }
@@ -1522,18 +1526,8 @@ async function init() {
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 if (!isMoving || isBelowLane) {
-                    // If this is the second roll of a frame in scoring mode, just hide the pins
-                    // that have already fallen. This gives a clear lane for the second shot
-                    // without affecting the final score calculation for the frame.
-                    if (gameMode === 'scoring' && currentRoll === 1) {
-                        const fallenPins = getFallenPins();
-                        for (const pin of fallenPins) {
-                            pin.mesh.visible = false;
-                        }
-                    } else {
-                        // For any other case (freeplay, start of a frame, etc.), clear the pins entirely.
-                        clearFallenPins();
-                    }
+                    // The trigger's only job is to pick up the ball. All game state logic
+                    // is now handled by the endTurn() function, which is called by a timer.
 
                     // Set the collision group immediately to prevent collision on the next physics step.
                     ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
