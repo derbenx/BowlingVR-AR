@@ -67,6 +67,7 @@ let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
 let laneCollisionVisualizer = null;
+let vrAutostartNeeded = false;
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
@@ -614,8 +615,9 @@ async function main() {
 
     const isPWA = window.matchMedia('(display-mode: standalone)').matches;
 
-    if (!isPWA) {
-        // This is not a PWA, so show the AR button for the standard web experience.
+    if (isPWA) {
+        vrAutostartNeeded = true;
+    } else {
         const arButton = ARButton.createButton(renderer, {
             requiredFeatures: ['local-floor', 'plane-detection']
         });
@@ -670,6 +672,20 @@ async function main() {
 }
 
 function animate(timestamp, frame) {
+    if (vrAutostartNeeded) {
+        vrAutostartNeeded = false;
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+              if (supported) {
+                navigator.xr.requestSession('immersive-vr', {
+                  optionalFeatures: ['local-floor','plane-detection'],
+                })
+                .then((session) => {renderer.xr.setSession(session);});
+              }
+            });
+        }
+    }
+
     // Step the physics world first
     if(world) world.step();
 
@@ -1537,23 +1553,6 @@ async function init() {
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
-
-    const isPWA = window.matchMedia('(display-mode: standalone)').matches;
-
-    if (isPWA) {
-        // This is a PWA on Meta Quest, so we can autostart VR.
-        // The user clicking the PWA icon from the app library counts as the required user gesture.
-        if (navigator.xr && navigator.xr.isSessionSupported) {
-            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-              if (supported) {
-                navigator.xr.requestSession('immersive-vr', {
-                  optionalFeatures: ['local-floor','plane-detection'],
-                })
-                .then((session) => {renderer.xr.setSession(session);});
-              }
-            });
-        }
-    }
 }
 
 main();
