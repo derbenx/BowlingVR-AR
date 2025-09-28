@@ -43,6 +43,7 @@ let gripButtonState = [false, false];
 let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
+let rollCompletionTimer = null;
 let allPinsFallen = false;
 let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
@@ -385,7 +386,8 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
             scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
             pinsDownLastRoll = fallenPins.length;
             currentRoll++;
-            clearFallenPins();
+            // On the first roll, we now wait for the player to pick up the ball
+            // before clearing the fallen pins. That is handled in onSelectStart.
         }
     } else { // Second roll
         if (fallenPins.length === 10) { // Spare
@@ -745,9 +747,18 @@ function animate(timestamp, frame) {
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                if (isSleeping || isOutOfPlay) {
-                    isBallThrown = false; // Prevent this from running again until next throw
+                // If the ball is sleeping on the lane, process the roll immediately.
+                if (isSleeping && !isOutOfPlay) {
+                    isBallThrown = false;
                     processRoll();
+                }
+                // If the ball is out of play and no timer is running, start one.
+                else if (isOutOfPlay && !rollCompletionTimer) {
+                    rollCompletionTimer = setTimeout(() => {
+                        isBallThrown = false;
+                        processRoll();
+                        rollCompletionTimer = null;
+                    }, 30000); // 30-second timer
                 }
             }
         }
@@ -1239,6 +1250,10 @@ function resetPins() {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
     }
+    if (rollCompletionTimer) {
+        clearTimeout(rollCompletionTimer);
+        rollCompletionTimer = null;
+    }
     allPinsFallen = false;
 
     // Remove existing pins
@@ -1433,6 +1448,10 @@ function cleanupScene() {
     // Clear any pending timers
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
+    }
+    if (rollCompletionTimer) {
+        clearTimeout(rollCompletionTimer);
+        rollCompletionTimer = null;
     }
 
     // Remove all dynamic objects (pins and ball)
