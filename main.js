@@ -3,7 +3,6 @@ const dbg = 0;
 
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
 import { XRPlanes } from 'three/addons/webxr/XRPlanes.js';
@@ -612,11 +611,6 @@ async function main() {
 
     const loader = new GLTFLoader();
 
-    const arButton = ARButton.createButton(renderer, {
-        requiredFeatures: ['local-floor', 'plane-detection']
-    });
-    document.body.appendChild(arButton);
-
     renderer.xr.addEventListener('sessionstart', () => {
         const setupScene = async () => {
             let fY = 0;
@@ -661,16 +655,18 @@ async function main() {
     planes = new XRPlanes(renderer);
     //scene.add(planes);
 
-    if (navigator.xr && navigator.xr.isSessionSupported) {
-        navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-          if (supported && navigator.xr.requestSession) {
-            navigator.xr.requestSession('immersive-vr', {
-              optionalFeatures: ['local-floor','plane-detection'],
-            })
-            .then((session) => {renderer.xr.setSession(session);});
+    if (window.getDigitalGoodsService !== undefined) {
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+              if (supported && navigator.xr.requestSession) {
+                navigator.xr.requestSession('immersive-vr', {
+                  optionalFeatures: ['local-floor','plane-detection'],
+                })
+                .then((session) => {renderer.xr.setSession(session);});
+              }
+            });
           }
-        });
-      }
+    }
 
     init();
 }
