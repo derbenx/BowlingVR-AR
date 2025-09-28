@@ -758,7 +758,7 @@ function animate(timestamp, frame) {
                         isBallThrown = false;
                         processRoll();
                         rollCompletionTimer = null;
-                    }, 30000); // 30-second timer
+                    }, 5000); // 5-second timer
                 }
             }
         }
@@ -1520,8 +1520,18 @@ async function init() {
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 if (!isMoving || isBelowLane) {
-                    // If the ball is not moving or has fallen, clear the fallen pins
-                    clearFallenPins();
+                    // If this is the second roll of a frame in scoring mode, just hide the pins
+                    // that have already fallen. This gives a clear lane for the second shot
+                    // without affecting the final score calculation for the frame.
+                    if (gameMode === 'scoring' && currentRoll === 1) {
+                        const fallenPins = getFallenPins();
+                        for (const pin of fallenPins) {
+                            pin.mesh.visible = false;
+                        }
+                    } else {
+                        // For any other case (freeplay, start of a frame, etc.), clear the pins entirely.
+                        clearFallenPins();
+                    }
 
                     // Set the collision group immediately to prevent collision on the next physics step.
                     ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
