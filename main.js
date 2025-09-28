@@ -43,7 +43,6 @@ let gripButtonState = [false, false];
 let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
 let pinsFallenResetTimer = null;
-let rollCompletionTimer = null;
 let allPinsFallen = false;
 let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
@@ -68,8 +67,6 @@ let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
 let laneCollisionVisualizer = null;
-const loader = new GLTFLoader();
-let sceneSetupInitiated = false;
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
@@ -197,7 +194,7 @@ function drawScoreboard() {
     ctx.fillStyle = 'white';
 
     // Draw the 10 frames + total box
-    let lastValidScore = '';
+    let cumulativeTotal = 0;
     for (let i = 0; i < 11; i++) {
         const x = startX + i * frameWidth;
 
@@ -213,9 +210,7 @@ function drawScoreboard() {
 
             // Frame score text
             const frameScore = scoreData[i].frameScore || '';
-            if (frameScore) {
-                lastValidScore = frameScore;
-            }
+            cumulativeTotal += parseInt(frameScore) || 0;
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -241,7 +236,7 @@ function drawScoreboard() {
             }
         } else { // Final "Total" box
             ctx.strokeRect(x, startY, frameWidth, frameHeight);
-            const totalScore = lastValidScore;
+            const totalScore = cumulativeTotal.toString();
             ctx.font = '60px sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -253,6 +248,9 @@ function drawScoreboard() {
 }
 
 function startNewGame() {
+    // Ensure any open dialogs like "Play Again?" are closed.
+    dismissConfirmationDialog();
+
     // This is the code for a clean, empty scoreboard.
     scoreData = [];
     for (let i = 0; i < 10; i++) {
@@ -378,11 +376,12 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
             scoreData[currentFrame].rolls[0] = 'X';
             currentFrame++;
             pinsDownLastRoll = 0;
-            currentRoll = 0; // Signals a new frame
+            resetPins();
         } else {
             scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
             pinsDownLastRoll = fallenPins.length;
             currentRoll++;
+            clearFallenPins();
         }
     } else { // Second roll
         if (fallenPins.length === 10) { // Spare
@@ -393,6 +392,7 @@ function processStandardFrameRoll(fallenPins, fallenThisRoll) {
         currentFrame++;
         currentRoll = 0;
         pinsDownLastRoll = 0;
+        resetPins();
     }
 }
 
@@ -401,25 +401,40 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 
     if (currentRoll === 0) { // First roll
         frame.rolls[0] = fallenThisRoll === 10 ? 'X' : fallenThisRoll.toString();
-        pinsDownLastRoll = fallenPins.length;
+        if (fallenThisRoll === 10) { // Strike
+            resetPins();
+            pinsDownLastRoll = 0;
+        } else {
+            clearFallenPins();
+            pinsDownLastRoll = fallenPins.length;
+        }
         currentRoll++;
     } else if (currentRoll === 1) { // Second roll
         const firstRollWasStrike = frame.rolls[0] === 'X';
 
         if (firstRollWasStrike) {
+            // This is the first bonus ball after a strike. Rack was full.
             const pinsThisThrow = fallenPins.length;
             frame.rolls[1] = pinsThisThrow === 10 ? 'X' : pinsThisThrow.toString();
-            pinsDownLastRoll = fallenPins.length;
+            if (pinsThisThrow === 10) { // Second strike
+                resetPins();
+                pinsDownLastRoll = 0;
+            } else {
+                clearFallenPins();
+                pinsDownLastRoll = fallenPins.length;
+            }
         } else {
+            // This is the second ball of a standard frame.
             if (fallenPins.length === 10) { // Spare
                 frame.rolls[1] = '/';
+                resetPins(); // Reset for bonus ball
+                pinsDownLastRoll = 0;
             } else { // Open frame
                 frame.rolls[1] = fallenThisRoll.toString();
                 isGameOver = true; // Game over, no third roll
             }
-            pinsDownLastRoll = fallenPins.length;
         }
-
+        // If we're not game over, we advance to the third roll
         if (!isGameOver) {
             currentRoll++;
         }
@@ -428,42 +443,16 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
         const secondRollWasStrike = frame.rolls[1] === 'X';
 
         if (firstRollWasStrike && secondRollWasStrike) {
+            // Third strike in a row. Rack was full.
             frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
         } else if (firstRollWasStrike) {
+            // First was strike, second was not. Partial rack.
             frame.rolls[2] = fallenPins.length === 10 ? '/' : fallenThisRoll.toString();
-        } else { // Spare on second roll
+        } else {
+            // First was not strike, second was a spare. Rack is full.
             frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
         }
         isGameOver = true;
-    }
-}
-
-function endTurn() {
-    // This is the new central function to manage the game state after a roll.
-    // 1. It processes the score.
-    // 2. It checks if the game is over.
-    // 3. It determines whether to do a full reset or just prepare for the next roll.
-
-    processRoll(); // Update scores first
-
-    if (isGameOver) {
-        // processRoll already handles the 'Game Over' dialog
-        return;
-    }
-
-    // After a strike or the second roll of a frame, processRoll sets currentRoll to 0.
-    // This is our cue for a full pin reset.
-    if (currentRoll === 0) {
-        resetPins();
-    }
-    // Otherwise, it was the first roll of a frame, so we just hide the fallen pins
-    // and reset the ball for the second shot.
-    else {
-        const fallenPins = getFallenPins();
-        for (const pin of fallenPins) {
-            pin.mesh.visible = false;
-        }
-        resetBall();
     }
 }
 
@@ -523,7 +512,7 @@ function drawPinHUD() {
     const canvas = pinHUD.userData.canvas;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.0)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Pin positions in a standard bowling triangle layout
@@ -558,7 +547,7 @@ function drawPinHUD() {
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = isStanding ? 'white' : 'black';
+        ctx.fillStyle = isStanding ? 'white' : '#555';
         ctx.fill();
     });
 
@@ -621,22 +610,11 @@ async function main() {
     world = new RAPIER.World(gravity);
     world.integrationParameters.dt = 1/120; //90fps ?
 
+    const loader = new GLTFLoader();
+
     const isPWA = window.matchMedia('(display-mode: standalone)').matches;
 
-    if (isPWA) {
-        // This is a PWA on Meta Quest, so we can autostart VR.
-        // The user clicking the PWA icon from the app library counts as the required user gesture.
-        if (navigator.xr && navigator.xr.isSessionSupported) {
-            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-              if (supported) {
-                navigator.xr.requestSession('immersive-vr', {
-                  optionalFeatures: ['local-floor','plane-detection'],
-                })
-                .then((session) => {renderer.xr.setSession(session);});
-              }
-            });
-        }
-    } else {
+    if (!isPWA) {
         // This is not a PWA, so show the AR button for the standard web experience.
         const arButton = ARButton.createButton(renderer, {
             requiredFeatures: ['local-floor', 'plane-detection']
@@ -645,7 +623,41 @@ async function main() {
     }
 
     renderer.xr.addEventListener('sessionstart', () => {
-        // Scene setup is now handled in the animate loop
+        const setupScene = async () => {
+            let fY = 0;
+            // Wait for a plane to be detected
+            await new Promise(resolve => {
+                const checkFloor = setInterval(() => {
+                    if (planes.children.length > 0) {
+                        for (const planeMesh of planes.children) {
+                            fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
+                        }
+                        clearInterval(checkFloor);
+                        resolve();
+                    }
+                }, 150);
+            });
+
+            fY_floor = fY;
+            await placeScene(fY, loader, world, dynamicObjects); // Await the async function
+            updateGameModeUI(); // Now this runs after placeScene is complete
+
+            // Position and show the debug display once the world is set up
+            if (showButtons && debugDisplay) {
+                const cameraPosition = new THREE.Vector3();
+                camera.getWorldPosition(cameraPosition);
+                const cameraQuaternion = new THREE.Quaternion();
+                camera.getWorldQuaternion(cameraQuaternion);
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+
+                debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
+                debugDisplay.position.y += 0.5; // Place it a bit higher
+                debugDisplay.quaternion.copy(cameraQuaternion);
+                debugDisplay.visible = true;
+            }
+        };
+
+        setupScene();
     });
 
     renderer.xr.addEventListener('sessionend', cleanupScene);
@@ -653,43 +665,11 @@ async function main() {
     // Setup plane detection
     planes = new XRPlanes(renderer);
     //scene.add(planes);
-    //planes.visible = false;
 
-
-     }
     init();
+}
 
 function animate(timestamp, frame) {
-    if (renderer.xr.isPresenting && !sceneSetupInitiated && frame) {
-        if (planes.children.length > 0) {
-            sceneSetupInitiated = true;
-
-            let fY = 0;
-            for (const planeMesh of planes.children) {
-                fY = planeMesh.position.y < fY ? planeMesh.position.y : fY;
-            }
-            fY_floor = fY;
-
-            (async () => {
-                await placeScene(fY, loader, world, dynamicObjects);
-                updateGameModeUI();
-
-                if (showButtons && debugDisplay) {
-                    const cameraPosition = new THREE.Vector3();
-                    camera.getWorldPosition(cameraPosition);
-                    const cameraQuaternion = new THREE.Quaternion();
-                    camera.getWorldQuaternion(cameraQuaternion);
-                    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-
-                    debugDisplay.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                    debugDisplay.position.y += 0.5; // Place it a bit higher
-                    debugDisplay.quaternion.copy(cameraQuaternion);
-                    debugDisplay.visible = true;
-                }
-            })();
-        }
-    }
-
     // Step the physics world first
     if(world) world.step();
 
@@ -760,14 +740,9 @@ function animate(timestamp, frame) {
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // If the ball has stopped or is out of play, and a timer isn't already running,
-                // start the end-of-turn timer.
-                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
+                if (isSleeping || isOutOfPlay) {
                     isBallThrown = false; // Prevent this from running again until next throw
-                    rollCompletionTimer = setTimeout(() => {
-                        endTurn();
-                        rollCompletionTimer = null;
-                    }, 5000); // 5-second timer
+                    processRoll();
                 }
             }
         }
@@ -926,7 +901,7 @@ function animate(timestamp, frame) {
                             floorOffsetSaveTimer = setTimeout(() => {
                                 localStorage.setItem('floorOffset', floorOffset);
                                 floorOffsetSaveTimer = null;
-                            }, 20000);
+                            }, 120000);
                         }
                     } else if (gripButtonState[i]) {
                         gripButtonState[i] = false;
@@ -961,7 +936,7 @@ function animate(timestamp, frame) {
                                 'Reset the game?',
                                 [
                                     { text: 'No', action: 'dismiss' },
-                                    { text: 'Yes', action: 'startNewGame' }
+                                    { text: 'Yes', action: 'reset' }
                                 ],
                                 renderer
                             );
@@ -1018,21 +993,23 @@ function animate(timestamp, frame) {
                     }
                 }
 
-                // Handle Pin HUD toggle (either controller, thumbstick press is 3)
-                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
-                    hudButtonState = true;
-                    if (pinHUD) {
-                        pinHUD.visible = !pinHUD.visible;
-                        if (pinHUD.visible && laneObject) {
-                            const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
-                            if (scoreboard) {
-                                pinHUD.quaternion.copy(scoreboard.quaternion);
+                // Handle Pin HUD toggle (left controller, thumbstick press is 3)
+                if (i === 0) { // Left controller
+                    if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
+                        hudButtonState = true;
+                        if (pinHUD) {
+                            pinHUD.visible = !pinHUD.visible;
+                            if (pinHUD.visible && laneObject) {
+                                const lanePosition = laneObject.mesh.position;
+                                pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                                if (scoreboard) {
+                                    pinHUD.quaternion.copy(scoreboard.quaternion);
+                                }
                             }
                         }
+                    } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
+                        hudButtonState = false;
                     }
-                } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
-                    hudButtonState = false;
                 }
             }
         }
@@ -1224,42 +1201,12 @@ function getFallenPins() {
     return fallenPins;
 }
 
-function resetBall() {
-    const ball = dynamicObjects.find(obj => obj.isBall);
-    if (ball) {
-        // If the ball was being held, release it
-        if (holdingController) {
-            holdingController = null;
-        }
-
-        // Ensure the ball is a dynamic body and has the correct collision group
-        ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
-        ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
-
-        // Reset position to its initial spot, accounting for any floor offset changes
-        const initialPos = ball.initialPosition;
-        const resetY = fY_floor + floorOffset + (initialPos.y - fY_floor);
-        ball.body.setTranslation({ x: initialPos.x, y: resetY, z: initialPos.z }, true);
-
-        // Reset velocities
-        ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-        ball.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
-
-        // Reset throw state
-        isBallThrown = false;
-    }
-}
-
 function resetPins() {
     // The confirmation dialog is dismissed by the input handler that calls this.
     // No need to dismiss it here.
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
-    }
-    if (rollCompletionTimer) {
-        clearTimeout(rollCompletionTimer);
-        rollCompletionTimer = null;
     }
     allPinsFallen = false;
 
@@ -1275,9 +1222,6 @@ function resetPins() {
 
     // Create new pins
     createPins(fY_floor + floorOffset);
-
-    // Reset the ball's position
-    resetBall();
 }
 
 function getBallLocationState() {
@@ -1330,7 +1274,7 @@ function createConfirmationDialog(title, buttons, renderer) {
     const titleMat = new THREE.MeshBasicMaterial({ map: titleTexture, transparent: true });
     const titleMesh = new THREE.Mesh(titleGeo, titleMat);
     titleMesh.position.y = 0.1;
-    titleMesh.position.z = 0.02; // Increased to prevent z-fighting with the panel
+    titleMesh.position.z = 0.01;
     dialog.add(titleMesh);
 
     // Function to draw a single button
@@ -1456,10 +1400,6 @@ function cleanupScene() {
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
     }
-    if (rollCompletionTimer) {
-        clearTimeout(rollCompletionTimer);
-        rollCompletionTimer = null;
-    }
 
     // Remove all dynamic objects (pins and ball)
     for (const obj of dynamicObjects) {
@@ -1527,10 +1467,8 @@ async function init() {
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 if (!isMoving || isBelowLane) {
-                    // In freeplay mode, picking up the ball should clear the fallen pins.
-                    if (gameMode === 'freeplay') {
-                        clearFallenPins();
-                    }
+                    // If the ball is not moving or has fallen, clear the fallen pins
+                    clearFallenPins();
 
                     // Set the collision group immediately to prevent collision on the next physics step.
                     ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
@@ -1599,6 +1537,23 @@ async function init() {
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
+
+    const isPWA = window.matchMedia('(display-mode: standalone)').matches;
+
+    if (isPWA) {
+        // This is a PWA on Meta Quest, so we can autostart VR.
+        // The user clicking the PWA icon from the app library counts as the required user gesture.
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+              if (supported) {
+                navigator.xr.requestSession('immersive-vr', {
+                  optionalFeatures: ['local-floor','plane-detection'],
+                })
+                .then((session) => {renderer.xr.setSession(session);});
+              }
+            });
+        }
+    }
 }
 
 main();
