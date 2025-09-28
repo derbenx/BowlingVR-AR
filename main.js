@@ -958,7 +958,7 @@ function animate(timestamp, frame) {
                                 'Reset the game?',
                                 [
                                     { text: 'No', action: 'dismiss' },
-                                    { text: 'Yes', action: 'reset' }
+                                    { text: 'Yes', action: 'startNewGame' }
                                 ],
                                 renderer
                             );
