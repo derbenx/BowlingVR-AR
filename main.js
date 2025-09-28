@@ -1122,7 +1122,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(9999).setFriction(.8).setCollisionGroups(BALL_COLLISION_GROUP);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(999).setFriction(10).setCollisionGroups(BALL_COLLISION_GROUP);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
@@ -1150,7 +1150,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         }
     });
 
-    createPins(fY);
+     createPins(fY + floorOffset);
 }
 
 function createPins(fY) {
