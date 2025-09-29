@@ -35,7 +35,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor;
+let pinModel, pinVertices, fY_floor, laneSurfaceHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1057,6 +1057,15 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         }
     });
 
+    // Calculate the height of the lane surface relative to the model's origin.
+    // This is done before the model is moved so the calculation is in local space.
+    if (laneMesh) {
+        const localBox = new THREE.Box3().setFromObject(laneMesh);
+        laneSurfaceHeight = localBox.max.y;
+    } else {
+        laneSurfaceHeight = 0; // Default to 0 if lane mesh isn't found
+    }
+
     scene.add(bowlingScene);
 
     // --- Create Lane Physics Body ---
@@ -1163,7 +1172,8 @@ function createPins(fY) {
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
         pinMesh.visible = true;
-        const initialPosition = { x: x, y: fY, z: z };
+        // Adjust the pin's Y position by the calculated lane surface height.
+        const initialPosition = { x: x, y: fY + laneSurfaceHeight, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
