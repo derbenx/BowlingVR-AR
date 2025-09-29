@@ -23,9 +23,9 @@ const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GRO
 // Held ball collides with Lane and Floor
 const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_FLOOR);
 // Pins collide with the Ball, other Pins, and the Lane (but NOT the infinite floor)
-const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE);
+const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE| GROUP_FLOOR);
 // Floor collides with the Ball ONLY
-const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL);
+const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
@@ -1122,7 +1122,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(999).setFriction(10).setCollisionGroups(BALL_COLLISION_GROUP);
+    //const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(99).setFriction(25).setCollisionGroups(BALL_COLLISION_GROUP);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
@@ -1161,6 +1162,7 @@ function createPins(fY) {
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
+        //const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setRestitution(.5).setMass(20).setFriction(1).setCollisionGroups(PINS_COLLISION_GROUP);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
