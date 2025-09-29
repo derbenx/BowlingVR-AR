@@ -1044,43 +1044,68 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBody = world.createRigidBody(laneBodyDesc);
         laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create a trimesh collider that is correctly scaled to the visual model
+    // Create colliders based on the names of the meshes in the GLB file.
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            // The body is at the origin, so its position is (0,0,0).
-            // This means the transformed vertices will be in the body's local space, which is what we want.
-            const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
+            // We need the child's local transform relative to the parent groundMesh.
+            // These transforms will be applied to the colliders attached to the main laneBody.
+            const localPosition = child.position;
+            const localQuaternion = child.quaternion;
 
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                // 1. Transform vertex to world space using the mesh's world matrix
-                tempVec.applyMatrix4(child.matrixWorld);
-                // 2. Transform vertex from world space to the rigid body's local space
-                tempVec.sub(bodyPosition);
+            if (child.name === "lane") {
+                // For the 'lane', create a simple, perfect cuboid collider.
+                // We compute the bounding box from the geometry to get its size in local space.
+                child.geometry.computeBoundingBox();
+                const boundingBox = child.geometry.boundingBox;
+                const size = boundingBox.getSize(new THREE.Vector3());
+                const centerOffset = boundingBox.getCenter(new THREE.Vector3());
 
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
+                // Rapier cuboids use half-extents.
+                const halfExtents = size.clone().multiplyScalar(0.5);
 
-            const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
-            world.createCollider(trimeshDesc, laneBody);
+                // The collider's final position is the mesh's local position plus its geometry's center offset.
+                const colliderPos = localPosition.clone().add(centerOffset);
 
-            if (showCollision){
-                // Create and add the visualizer mesh
-                const visualizerGeo = new THREE.BufferGeometry();
-                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-                // Position it at the rigid body's location (which is currently the origin)
-                laneCollisionVisualizer.position.copy(bodyPosition);
-                scene.add(laneCollisionVisualizer);
+                const cuboidDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
+                    .setTranslation(colliderPos.x, colliderPos.y, colliderPos.z)
+                    .setRotation(localQuaternion)
+                    .setFriction(0.1)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(cuboidDesc, laneBody);
+
+                if (showCollision) {
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, transparent: true, opacity: 0.5 }); // Magenta for lane
+                    const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    visualizerMesh.position.copy(centerOffset);
+                    child.add(visualizerMesh); // Add visualizer as a child of the original mesh
+                }
+
+            } else if (child.name === "gutter") {
+                // For the 'gutter', create a detailed trimesh to preserve its complex shape.
+                const vertices = child.geometry.attributes.position.array;
+                const indices = child.geometry.index.array;
+
+                const trimeshDesc = RAPIER.ColliderDesc.trimesh(new Float32Array(vertices), indices)
+                    .setTranslation(localPosition.x, localPosition.y, localPosition.z)
+                    .setRotation(localQuaternion)
+                    .setRestitution(0.1)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(trimeshDesc, laneBody);
+
+                if (showCollision) {
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.5 }); // Cyan for gutter
+                    const visualizerGeo = new THREE.BufferGeometry();
+                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+                    if (indices) {
+                        visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                    }
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    // The visualizer's geometry is already in the correct local space,
+                    // so we just add it as a child to inherit the parent's transform.
+                    child.add(visualizerMesh);
+                }
             }
         }
     });
