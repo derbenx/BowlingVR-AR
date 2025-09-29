@@ -1110,6 +1110,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                     // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
                     laneCollisionVisualizer.add(visualizerMesh);
                 }
+            } else {
+                // Hide other meshes in the GLB like the extra ball and pins
+                child.visible = false;
             }
         }
     });
