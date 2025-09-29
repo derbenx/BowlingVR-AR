@@ -1044,26 +1044,22 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBody = world.createRigidBody(laneBodyDesc);
         laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create colliders based on the names of the meshes in the GLB file.
+    // --- Final, Name-Based Hybrid Collider Creation ---
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            // We need the child's local transform relative to the parent groundMesh.
-            // These transforms will be applied to the colliders attached to the main laneBody.
+            // Use local transforms for perfect alignment
             const localPosition = child.position;
             const localQuaternion = child.quaternion;
 
-            if (child.name === "lane") {
-                // For the 'lane', create a simple, perfect cuboid collider.
-                // We compute the bounding box from the geometry to get its size in local space.
+            if (child.name === "Plane.001") {
+                console.log(`Identified Lane mesh: ${child.name}`);
+                // For the 'lane' (Plane.001), create a simple, perfect cuboid collider.
                 child.geometry.computeBoundingBox();
                 const boundingBox = child.geometry.boundingBox;
                 const size = boundingBox.getSize(new THREE.Vector3());
                 const centerOffset = boundingBox.getCenter(new THREE.Vector3());
 
-                // Rapier cuboids use half-extents.
                 const halfExtents = size.clone().multiplyScalar(0.5);
-
-                // The collider's final position is the mesh's local position plus its geometry's center offset.
                 const colliderPos = localPosition.clone().add(centerOffset);
 
                 const cuboidDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
@@ -1079,13 +1075,14 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                     const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
                     const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
                     visualizerMesh.position.copy(centerOffset);
-                    child.add(visualizerMesh); // Add visualizer as a child of the original mesh
+                    child.add(visualizerMesh);
                 }
 
-            } else if (child.name === "gutter") {
-                // For the 'gutter', create a detailed trimesh to preserve its complex shape.
+            } else if (child.name === "Plane.002") {
+                console.log(`Identified Gutter mesh: ${child.name}`);
+                // For the 'gutter' (Plane.002), create a detailed trimesh to preserve its complex shape.
                 const vertices = child.geometry.attributes.position.array;
-                const indices = child.geometry.index.array;
+                const indices = child.geometry.index ? child.geometry.index.array : undefined;
 
                 const trimeshDesc = RAPIER.ColliderDesc.trimesh(new Float32Array(vertices), indices)
                     .setTranslation(localPosition.x, localPosition.y, localPosition.z)
@@ -1102,8 +1099,6 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                         visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
                     }
                     const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
-                    // The visualizer's geometry is already in the correct local space,
-                    // so we just add it as a child to inherit the parent's transform.
                     child.add(visualizerMesh);
                 }
             }
