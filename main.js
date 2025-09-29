@@ -35,7 +35,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor, laneSurfaceHeight;
+let pinModel, pinVertices, fY_floor, laneSurfaceHeightOffset;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1057,13 +1057,13 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         }
     });
 
-    // Calculate the height of the lane surface relative to the model's origin.
-    // This is done before the model is moved so the calculation is in local space.
+    // Calculate the height of the lane surface relative to the model's own origin.
+    // This gives us a fixed offset that we can add to the detected floor height.
     if (laneMesh) {
         const localBox = new THREE.Box3().setFromObject(laneMesh);
-        laneSurfaceHeight = localBox.max.y;
+        laneSurfaceHeightOffset = localBox.max.y;
     } else {
-        laneSurfaceHeight = 0; // Default to 0 if lane mesh isn't found
+        laneSurfaceHeightOffset = 0; // Default to 0 if lane mesh isn't found
     }
 
     scene.add(bowlingScene);
@@ -1111,6 +1111,15 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const initialPosition = new THREE.Vector3(0, fY, -2);
     setLanePosition(initialPosition);
 
+    // Now that the lane is positioned, calculate the world-space height of its surface
+    if (laneMesh) {
+        laneMesh.updateMatrixWorld(true); // Force update of world matrix
+        const worldBox = new THREE.Box3().setFromObject(laneMesh);
+        laneSurfaceY = worldBox.max.y;
+    } else {
+        laneSurfaceY = fY; // Fallback to floor height if lane mesh isn't found
+    }
+
     // --- Create Floor ---
     const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor - 0.25, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
@@ -1127,7 +1136,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const ballBox = new THREE.Box3().setFromObject(ballMesh);
         const ballSize = ballBox.getSize(new THREE.Vector3());
         const ballRadius = ballSize.x / 2;
-        const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
+        // Position the ball slightly above the lane surface, relative to the initial floor height.
+        const ballInitialPosition = { x: 0, y: fY + laneSurfaceHeightOffset + 0.1, z: -2 };
         const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
         const ballBody = world.createRigidBody(ballBodyDesc);
         const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
@@ -1161,7 +1171,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 transformedVertices[i+2] = tempVec.z;
             }
             pinVertices = transformedVertices; // Set global vertices for collider
-            createPins(fY + floorOffset);
+            createPins(fY);
         }
     }
 }
@@ -1172,8 +1182,8 @@ function createPins(fY) {
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
         pinMesh.visible = true;
-        // Adjust the pin's Y position by the calculated lane surface height.
-        const initialPosition = { x: x, y: fY + laneSurfaceHeight, z: z };
+        // Place pins on the lane surface, relative to the initial floor height.
+        const initialPosition = { x: x, y: fY + laneSurfaceHeightOffset, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
 
@@ -1332,10 +1342,9 @@ function getBallLocationState() {
         return 'ground';
     }
 
-    // Default state if in the air but not over the lane/gutter.
-    // The scoring logic considers 'gutter' or 'ground' as out of play.
-    // Anything else is effectively "in play".
-    return 'lane';
+    // If we've reached this point, the ball is not touching the lane, gutter, or ground.
+    // It must be in the air.
+    return 'in-air';
 }
 
 
