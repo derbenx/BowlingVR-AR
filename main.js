@@ -1044,7 +1044,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBody = world.createRigidBody(laneBodyDesc);
         laneObject = { mesh: groundMesh, body: laneBody };
 
-    // --- Final, Scaled, Name-Based Hybrid Collider Creation ---
+    // --- Final, Convex Hull, Scaled, Name-Based Hybrid Collider Creation ---
     groundMesh.traverse(child => {
         if (child.isMesh) {
             // Get local transforms. These are applied to the colliders relative to the parent rigid body.
@@ -1052,51 +1052,45 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const localQuaternion = child.quaternion;
             const localScale = child.scale;
 
+            const originalVertices = child.geometry.attributes.position.array;
+            const indices = child.geometry.index ? child.geometry.index.array : undefined;
+
+            // Create a new scaled vertex array for the physics engine, as all colliders need it.
+            const scaledVertices = new Float32Array(originalVertices.length);
+            for (let i = 0; i < originalVertices.length; i += 3) {
+                scaledVertices[i]   = originalVertices[i]   * localScale.x;
+                scaledVertices[i+1] = originalVertices[i+1] * localScale.y;
+                scaledVertices[i+2] = originalVertices[i+2] * localScale.z;
+            }
+
             if (child.name === "lanex") {
-                console.log(`Identified Lane mesh: ${child.name} with scale`, localScale);
-                child.geometry.computeBoundingBox();
-                const boundingBox = child.geometry.boundingBox;
+                console.log(`Identified Lane mesh: ${child.name}. Creating Convex Hull collider.`);
 
-                // Get the size from the bounding box for the visualizer (unscaled)
-                const unscaledSize = boundingBox.getSize(new THREE.Vector3());
-                const unscaledCenterOffset = boundingBox.getCenter(new THREE.Vector3());
-
-                // Create scaled dimensions for the physics collider
-                const scaledSize = unscaledSize.clone().multiply(localScale);
-                const scaledCenterOffset = unscaledCenterOffset.clone().multiply(localScale);
-                const halfExtents = scaledSize.clone().multiplyScalar(0.5);
-                const colliderPos = localPosition.clone().add(scaledCenterOffset);
-
-                const cuboidDesc = RAPIER.ColliderDesc.cuboid(halfExtents.x, halfExtents.y, halfExtents.z)
-                    .setTranslation(colliderPos.x, colliderPos.y, colliderPos.z)
+                // For the 'lanex', create a convex hull collider. This "shrink-wraps" the mesh.
+                const convexHullDesc = RAPIER.ColliderDesc.convexHull(scaledVertices)
+                    .setTranslation(localPosition.x, localPosition.y, localPosition.z)
                     .setRotation(localQuaternion)
                     .setFriction(0.1)
                     .setRestitution(0.0)
                     .setCollisionGroups(LANE_COLLISION_GROUP);
-                world.createCollider(cuboidDesc, laneBody);
+                world.createCollider(convexHullDesc, laneBody);
 
                 if (showCollision) {
                     const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff00ff, transparent: true, opacity: 0.5 }); // Magenta for lane
-                    // The visualizer inherits the parent's scale, so we use the unscaled geometry.
-                    const visualizerGeo = new THREE.BoxGeometry(unscaledSize.x, unscaledSize.y, unscaledSize.z);
+                    // The visualizer for a convex hull is the mesh itself. We use the unscaled vertices because the visualizer is a child of the scaled mesh.
+                    const visualizerGeo = new THREE.BufferGeometry();
+                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(originalVertices, 3));
+                    if (indices) {
+                        visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                    }
                     const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
-                    visualizerMesh.position.copy(unscaledCenterOffset);
-                    child.add(visualizerMesh);
+                    child.add(visualizerMesh); // Add visualizer as a child to inherit transforms.
                 }
 
             } else if (child.name === "gutter") {
-                console.log(`Identified Gutter mesh: ${child.name} with scale`, localScale);
-                const originalVertices = child.geometry.attributes.position.array;
-                const indices = child.geometry.index ? child.geometry.index.array : undefined;
+                console.log(`Identified Gutter mesh: ${child.name}. Creating Trimesh collider.`);
 
-                // Create a new scaled vertex array for the physics engine.
-                const scaledVertices = new Float32Array(originalVertices.length);
-                for (let i = 0; i < originalVertices.length; i += 3) {
-                    scaledVertices[i]   = originalVertices[i]   * localScale.x;
-                    scaledVertices[i+1] = originalVertices[i+1] * localScale.y;
-                    scaledVertices[i+2] = originalVertices[i+2] * localScale.z;
-                }
-
+                // For the 'gutter', create a detailed trimesh to preserve its complex shape.
                 const trimeshDesc = RAPIER.ColliderDesc.trimesh(scaledVertices, indices)
                     .setTranslation(localPosition.x, localPosition.y, localPosition.z)
                     .setRotation(localQuaternion)
