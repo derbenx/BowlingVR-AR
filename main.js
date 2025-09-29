@@ -1037,8 +1037,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const bowlingScene = bowlingGltf.scene;
 
     // --- Extract and prepare models ---
-    let laneMesh, gutterMesh, ballMesh, pinMesh;
+    let laneMesh, gutterMesh, ballTemplate, pinTemplate;
     bowlingScene.traverse(child => {
+        // We are only interested in the meshes with these exact names
         switch (child.name) {
             case 'lane':
                 laneMesh = child;
@@ -1047,19 +1048,19 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 gutterMesh = child;
                 break;
             case 'ball':
-                ballMesh = child;
+                ballTemplate = child;
                 break;
             case 'pin':
-                pinMesh = child;
+                pinTemplate = child;
                 break;
         }
     });
 
-    // The lane and gutter are static but the ball and pins are dynamic,
-    // so we add the whole scene first, then hide the original ball and pin.
+    // Add the static parts of the scene (lane and gutter) to the world
     scene.add(bowlingScene);
-    if (ballMesh) ballMesh.visible = false;
-    if (pinMesh) pinMesh.visible = false;
+    // Hide the original templates for the dynamic objects so we can use clones
+    if (ballTemplate) ballTemplate.visible = false;
+    if (pinTemplate) pinTemplate.visible = false;
 
 
     // --- Create Lane and Gutter Physics ---
@@ -1106,13 +1107,22 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     world.createCollider(floorColliderDesc, floorBody);
     updateFloorAndLanePosition();
 
-    // --- Create Bowling Ball (using original logic with new mesh) ---
-    const ballMeshGroup = new THREE.Group();
-    ballMeshGroup.add(ballMesh.clone());
-    const ballBox = new THREE.Box3().setFromObject(ballMeshGroup);
+    // --- Create Bowling Ball (using original logic with new template) ---
+    // The original code expected a `gltf.scene` which is a THREE.Group.
+    // The extracted `ballTemplate` is a THREE.Mesh. We wrap it in a group
+    // to match the structure the original code expects, preventing a crash.
+    const ballMesh = new THREE.Group();
+    ballMesh.add(ballTemplate.clone());
+    ballMesh.visible = true;
+
+    const ballBox = new THREE.Box3().setFromObject(ballMesh);
     const center = ballBox.getCenter(new THREE.Vector3());
-    ballMeshGroup.children[0].geometry.translate(-center.x, -center.y, -center.z);
-    ballBox.setFromObject(ballMeshGroup);
+    ballMesh.traverse(child => {
+        if (child.isMesh) {
+            child.geometry.translate(-center.x, -center.y, -center.z);
+        }
+    });
+    ballBox.setFromObject(ballMesh);
 
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
@@ -1123,13 +1133,14 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    dynamicObjects.push({ mesh: ballMeshGroup, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
-    scene.add(ballMeshGroup);
-    ballMeshGroup.visible = true;
+    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
+    scene.add(ballMesh);
 
-    // --- Create Bowling Pins (using original logic with new mesh) ---
+    // --- Create Bowling Pins (using original logic with new template) ---
+    // The original code expected `pinGltf.scene` which is a THREE.Group.
+    // We set `pinModel` to be a new group containing our cloned template to match this.
     pinModel = new THREE.Group();
-    pinModel.add(pinMesh.clone());
+    pinModel.add(pinTemplate.clone());
 
     pinModel.traverse(child => {
         if (child.isMesh) {
@@ -1156,6 +1167,7 @@ function createPins(fY) {
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
+        pinMesh.visible = true; // Ensure the cloned pin is visible
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
@@ -1163,7 +1175,6 @@ function createPins(fY) {
         world.createCollider(colliderDesc, pinBody);
         dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
         scene.add(pinMesh);
-        pinMesh.visible = true;
     }
 
     const pinSpacing = 0.2;
