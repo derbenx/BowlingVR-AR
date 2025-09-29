@@ -1171,7 +1171,11 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 transformedVertices[i+2] = tempVec.z;
             }
             pinVertices = transformedVertices; // Set global vertices for collider
-            createPins(fY);
+            // Only create the initial set of pins if we are NOT in scoring mode.
+            // In scoring mode, startNewGame() will handle the first pin setup.
+            if (gameMode !== 'scoring') {
+                createPins(fY);
+            }
         }
     }
 }
