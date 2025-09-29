@@ -1036,60 +1036,51 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const bowlingGltf = await loader.loadAsync('3d/bowling.glb');
     const bowlingScene = bowlingGltf.scene;
 
-    // Find the named meshes within the loaded scene
-    let laneMesh, gutterMesh, ballMeshTemplate;
+    // --- Extract and prepare models ---
+    let laneMesh, gutterMesh, ballMeshTemplate, pinObject;
     bowlingScene.traverse(child => {
-        if (child.isMesh) {
-            switch (child.name) {
-                case 'lane':
-                    laneMesh = child;
-                    break;
-                case 'gutter':
-                    gutterMesh = child;
-                    break;
-                case 'ball':
-                    ballMeshTemplate = child;
-                    ballMeshTemplate.visible = false; // Hide the template
-                    break;
-                case 'pin':
-                    pinModel = child; // This will be used as the template for pins
-                    pinModel.visible = false; // Hide the template
-                    break;
-            }
+        switch (child.name) {
+            case 'lane':
+                laneMesh = child;
+                break;
+            case 'gutter':
+                gutterMesh = child;
+                break;
+            case 'ball':
+                ballMeshTemplate = child;
+                ballMeshTemplate.visible = false; // Hide the template
+                break;
+            case 'pin':
+                pinObject = child;
+                pinObject.visible = false; // Hide the template group/mesh
+                break;
         }
     });
 
-    // The visual scene now contains the lane and gutter
     scene.add(bowlingScene);
 
-    // Create a single fixed rigid body for the lane and gutter.
+    // --- Create Lane Physics Body ---
     const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
     const laneBody = world.createRigidBody(laneBodyDesc);
-    laneObject = { mesh: bowlingScene, body: laneBody }; // The "mesh" is now the whole group
+    laneObject = { mesh: bowlingScene, body: laneBody };
 
     // Create a trimesh collider for the gutter
-    if (gutterMesh) {
+    if (gutterMesh && gutterMesh.isMesh) {
         gutterMesh.updateMatrixWorld(true);
-        const originalVertices = gutterMesh.geometry.attributes.position.array;
-        const transformedVertices = new Float32Array(originalVertices.length);
+        const vertices = gutterMesh.geometry.attributes.position.array;
+        const indices = gutterMesh.geometry.index.array;
+        const transformedVertices = new Float32Array(vertices.length);
         const tempVec = new THREE.Vector3();
-        // Since the rigid body is at the origin when the collider is created,
-        // we can use the mesh's world matrix to get the vertices in the correct position.
-        const matrix = gutterMesh.matrixWorld;
-
-        for (let i = 0; i < originalVertices.length; i += 3) {
-            tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-            tempVec.applyMatrix4(matrix);
+        for (let i = 0; i < vertices.length; i += 3) {
+            tempVec.set(vertices[i], vertices[i+1], vertices[i+2]).applyMatrix4(gutterMesh.matrixWorld);
             transformedVertices[i] = tempVec.x;
             transformedVertices[i+1] = tempVec.y;
             transformedVertices[i+2] = tempVec.z;
         }
-
-        const indices = gutterMesh.geometry.index.array;
         const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
             .setRestitution(0.0)
             .setCollisionGroups(LANE_COLLISION_GROUP);
-        trimeshDesc.userData = { name: 'gutter' }; // Add identifier
+        trimeshDesc.userData = { name: 'gutter' };
         world.createCollider(trimeshDesc, laneBody);
     }
 
@@ -1099,79 +1090,71 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const box = new THREE.Box3().setFromObject(laneMesh);
         const size = box.getSize(new THREE.Vector3());
         const center = box.getCenter(new THREE.Vector3());
-
-        // The collider's position is relative to the rigid body's origin.
-        const bodyT = laneBody.translation();
-        const bodyPosition = new THREE.Vector3(bodyT.x, bodyT.y, bodyT.z);
-        const relativeCenter = center.sub(bodyPosition);
-
         const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
-            .setTranslation(relativeCenter.x, relativeCenter.y, relativeCenter.z)
+            .setTranslation(center.x, center.y, center.z)
             .setRestitution(0.0)
             .setCollisionGroups(LANE_COLLISION_GROUP);
-        cuboidDesc.userData = { name: 'lane' }; // Add identifier
+        cuboidDesc.userData = { name: 'lane' };
         world.createCollider(cuboidDesc, laneBody);
     }
 
-    // Set the initial position for all lane components
+    // Set the initial position for the entire lane setup
     const initialPosition = new THREE.Vector3(0, fY, -2);
     setLanePosition(initialPosition);
 
-    // Create an infinite floor plane to prevent objects from falling through
+    // --- Create Floor ---
     const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor - 0.25, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
     const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100)
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
     world.createCollider(floorColliderDesc, floorBody);
-
-    // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
 
-    // Create Bowling Ball from the template mesh
-    const ballMesh = ballMeshTemplate.clone();
-    ballMesh.visible = true; // Make the clone visible
-    const ballBox = new THREE.Box3().setFromObject(ballMesh);
-    const ballSize = ballBox.getSize(new THREE.Vector3());
-    const ballRadius = ballSize.x / 2;
-
-    const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
-    const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
-    const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
-    const ballCollider = world.createCollider(ballColliderDesc, ballBody);
-
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
-    scene.add(ballMesh);
-
-    // Create Bowling Pins
-    // The `pinModel` is a group containing the mesh. We need to find the mesh
-    // to get its geometry and bake its world transform into the vertices for the convex hull.
-    let actualPinMesh;
-    pinModel.traverse(child => {
-        if (child.isMesh) {
-            actualPinMesh = child;
-        }
-    });
-
-    if (actualPinMesh) {
-        actualPinMesh.updateMatrixWorld(true);
-        const originalVertices = actualPinMesh.geometry.attributes.position.array;
-        const transformedVertices = new Float32Array(originalVertices.length);
-        const tempVec = new THREE.Vector3();
-        const matrix = actualPinMesh.matrixWorld;
-
-        for (let i = 0; i < originalVertices.length; i += 3) {
-            tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-            tempVec.applyMatrix4(matrix);
-            transformedVertices[i] = tempVec.x;
-            transformedVertices[i+1] = tempVec.y;
-            transformedVertices[i+2] = tempVec.z;
-        }
-        pinVertices = transformedVertices;
+    // --- Create Bowling Ball ---
+    if (ballMeshTemplate) {
+        const ballMesh = ballMeshTemplate.clone();
+        ballMesh.visible = true;
+        const ballBox = new THREE.Box3().setFromObject(ballMesh);
+        const ballSize = ballBox.getSize(new THREE.Vector3());
+        const ballRadius = ballSize.x / 2;
+        const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
+        const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
+        const ballBody = world.createRigidBody(ballBodyDesc);
+        const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
+        const ballCollider = world.createCollider(ballColliderDesc, ballBody);
+        dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
+        scene.add(ballMesh);
     }
 
-    createPins(fY + floorOffset);
+    // --- Create Bowling Pins ---
+    if (pinObject) {
+        pinModel = pinObject; // Set global pinModel for createPins to clone
+        let actualPinMesh;
+        if (pinObject.isMesh) {
+            actualPinMesh = pinObject;
+        } else { // It's a group, find the mesh inside
+            pinObject.traverse(child => {
+                if (child.isMesh) actualPinMesh = child;
+            });
+        }
+
+        if (actualPinMesh) {
+            actualPinMesh.updateMatrixWorld(true);
+            const vertices = actualPinMesh.geometry.attributes.position.array;
+            const transformedVertices = new Float32Array(vertices.length);
+            const tempVec = new THREE.Vector3();
+            const matrix = actualPinMesh.matrixWorld;
+            for (let i = 0; i < vertices.length; i += 3) {
+                tempVec.set(vertices[i], vertices[i+1], vertices[i+2]).applyMatrix4(matrix);
+                transformedVertices[i] = tempVec.x;
+                transformedVertices[i+1] = tempVec.y;
+                transformedVertices[i+2] = tempVec.z;
+            }
+            pinVertices = transformedVertices; // Set global vertices for collider
+            createPins(fY + floorOffset);
+        }
+    }
 }
 
 function createPins(fY) {
@@ -1179,19 +1162,21 @@ function createPins(fY) {
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
-        pinMesh.visible = true; // Make sure the cloned pin is visible
+        pinMesh.visible = true;
         const initialPosition = { x: x, y: fY, z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
-        // The convex hull collider is created from the pre-transformed vertices
-        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
-        const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
-        scene.add(pinMesh);
+
+        if (pinVertices && pinVertices.length > 0) {
+            const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
+            world.createCollider(colliderDesc, pinBody);
+            dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
+            scene.add(pinMesh);
+        }
     }
 
     const pinSpacing = 0.2;
-    const pinStartZ = -7; //where pins are located!
+    const pinStartZ = -7;
     
     for (let row = 0; row < 4; row++) {
         for (let i = 0; i < row + 1; i++) {
