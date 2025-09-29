@@ -1033,7 +1033,7 @@ function animate(timestamp, frame) {
 
 async function placeScene(fY, loader, world, dynamicObjects) {
     // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/lane.glb');
+    const laneGltf = await loader.loadAsync('3d/bowling.glb');
 
         // Visual ground and Physics Ground
         const groundMesh = laneGltf.scene;
@@ -1044,43 +1044,72 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBody = world.createRigidBody(laneBodyDesc);
         laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create a trimesh collider that is correctly scaled to the visual model
+    if (showCollision) {
+        laneCollisionVisualizer = new THREE.Group();
+        scene.add(laneCollisionVisualizer);
+    }
+
+    // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
             child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            // The body is at the origin, so its position is (0,0,0).
-            // This means the transformed vertices will be in the body's local space, which is what we want.
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                // 1. Transform vertex to world space using the mesh's world matrix
-                tempVec.applyMatrix4(child.matrixWorld);
-                // 2. Transform vertex from world space to the rigid body's local space
-                tempVec.sub(bodyPosition);
+            if (child.name === 'lane') {
+                // Create a box collider for the lane for more reliable physics
+                const boundingBox = new THREE.Box3().setFromObject(child);
+                const size = boundingBox.getSize(new THREE.Vector3());
+                const center = boundingBox.getCenter(new THREE.Vector3());
 
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
+                // The collider's position is relative to the rigid body. Since the body is at the origin,
+                // the collider's translation is the mesh's world center.
+                center.sub(bodyPosition);
 
-            const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
-            world.createCollider(trimeshDesc, laneBody);
+                const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
+                    .setTranslation(center.x, center.y, center.z)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(cuboidDesc, laneBody);
 
-            if (showCollision){
-                // Create and add the visualizer mesh
-                const visualizerGeo = new THREE.BufferGeometry();
-                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-                // Position it at the rigid body's location (which is currently the origin)
-                laneCollisionVisualizer.position.copy(bodyPosition);
-                scene.add(laneCollisionVisualizer);
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    visualizerMesh.position.copy(center);
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
+
+            } else if (child.name === 'gutter') {
+                // Create a trimesh collider for the gutter to match its complex shape
+                const originalVertices = child.geometry.attributes.position.array;
+                const transformedVertices = new Float32Array(originalVertices.length);
+                const tempVec = new THREE.Vector3();
+
+                for (let i = 0; i < originalVertices.length; i += 3) {
+                    tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                    // Transform vertex to world space, then to the rigid body's local space
+                    tempVec.applyMatrix4(child.matrixWorld);
+                    tempVec.sub(bodyPosition);
+                    transformedVertices[i] = tempVec.x;
+                    transformedVertices[i+1] = tempVec.y;
+                    transformedVertices[i+2] = tempVec.z;
+                }
+
+                const indices = child.geometry.index.array;
+                const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(trimeshDesc, laneBody);
+
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BufferGeometry();
+                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+                    visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
             }
         }
     });
