@@ -1292,9 +1292,10 @@ function getBallLocationState() {
     let isTouchingGutter = false;
     let isTouchingLane = false;
 
-    // world.intersectionsWith(collider, callback) iterates through all colliders intersecting the given one.
-    world.intersectionsWith(ball.collider, (otherCollider) => {
-        if (otherCollider.userData) {
+    // Use the correct Rapier API to find contact pairs for the ball's collider.
+    world.narrowPhase.contactPairsWith(ball.collider.handle, (otherColliderHandle) => {
+        const otherCollider = world.getCollider(otherColliderHandle);
+        if (otherCollider && otherCollider.userData) {
             if (otherCollider.userData.name === 'gutter') {
                 isTouchingGutter = true;
             }
