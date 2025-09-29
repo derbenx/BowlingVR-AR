@@ -67,7 +67,6 @@ let floorBody = null;
 let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
-let laneCollisionVisualizer = null;
 const loader = new GLTFLoader();
 let sceneSetupInitiated = false;
 
@@ -1461,11 +1460,6 @@ function setLanePosition(position) {
         // Move the physics rigid body
         laneObject.body.setTranslation({ x: position.x, y: position.y, z: position.z }, true);
     }
-
-    if (laneCollisionVisualizer) {
-        // Move the collision visualizer to match the new body position
-        laneCollisionVisualizer.position.copy(position);
-    }
 }
 
 function cleanupScene() {
@@ -1496,10 +1490,7 @@ function cleanupScene() {
         world.removeRigidBody(laneObject.body);
         laneObject = null;
     }
-    if (laneCollisionVisualizer) {
-        scene.remove(laneCollisionVisualizer);
-        laneCollisionVisualizer = null;
-    }
+
     if (floorBody) {
         world.removeRigidBody(floorBody);
         floorBody = null;
