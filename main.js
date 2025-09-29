@@ -1101,7 +1101,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const center = box.getCenter(new THREE.Vector3());
 
         // The collider's position is relative to the rigid body's origin.
-        const bodyPosition = new THREE.Vector3().setFromMatrixPosition(laneBody.translation());
+        const bodyT = laneBody.translation();
+        const bodyPosition = new THREE.Vector3(bodyT.x, bodyT.y, bodyT.z);
         const relativeCenter = center.sub(bodyPosition);
 
         const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
@@ -1144,21 +1145,31 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     scene.add(ballMesh);
 
     // Create Bowling Pins
-    // The `pinModel` is already set from the GLB traversal.
-    // We bake the pin's local transform from the GLB into the vertices for the convex hull.
-    pinModel.updateMatrix();
-    const originalVertices = pinModel.geometry.attributes.position.array;
-    const transformedVertices = new Float32Array(originalVertices.length);
-    const tempVec = new THREE.Vector3();
-    const matrix = pinModel.matrix;
-    for (let i = 0; i < originalVertices.length; i += 3) {
-        tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-        tempVec.applyMatrix4(matrix);
-        transformedVertices[i] = tempVec.x;
-        transformedVertices[i+1] = tempVec.y;
-        transformedVertices[i+2] = tempVec.z;
+    // The `pinModel` is a group containing the mesh. We need to find the mesh
+    // to get its geometry and bake its world transform into the vertices for the convex hull.
+    let actualPinMesh;
+    pinModel.traverse(child => {
+        if (child.isMesh) {
+            actualPinMesh = child;
+        }
+    });
+
+    if (actualPinMesh) {
+        actualPinMesh.updateMatrixWorld(true);
+        const originalVertices = actualPinMesh.geometry.attributes.position.array;
+        const transformedVertices = new Float32Array(originalVertices.length);
+        const tempVec = new THREE.Vector3();
+        const matrix = actualPinMesh.matrixWorld;
+
+        for (let i = 0; i < originalVertices.length; i += 3) {
+            tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+            tempVec.applyMatrix4(matrix);
+            transformedVertices[i] = tempVec.x;
+            transformedVertices[i+1] = tempVec.y;
+            transformedVertices[i+2] = tempVec.z;
+        }
+        pinVertices = transformedVertices;
     }
-    pinVertices = transformedVertices;
 
     createPins(fY + floorOffset);
 }
