@@ -30,7 +30,7 @@ const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
-let world, planes;
+let world, planes, eventQueue;
 let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
@@ -59,6 +59,7 @@ let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
 let isBallThrown = false;
+let ballHasTouchedLane = false;
 let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
@@ -619,6 +620,7 @@ async function main() {
     document.body.appendChild(renderer.domElement);
 
     world = new RAPIER.World(gravity);
+    eventQueue = new RAPIER.EventQueue(true);
     world.integrationParameters.dt = 1/120; //90fps ?
 
     const arButton = ARButton.createButton(renderer, {
@@ -683,7 +685,26 @@ function animate(timestamp, frame) {
     }
 
     // Step the physics world first
-    if(world) world.step();
+    if(world) world.step(eventQueue);
+
+    // --- COLLISION EVENT HANDLING ---
+    if (eventQueue) {
+        eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (!ball || !laneObject || !laneObject.collider) return;
+
+            const ballColliderHandle = ball.collider.handle;
+            const laneColliderHandle = laneObject.collider.handle;
+
+            // Check if the collision involves the ball and the lane
+            if (started) { // "started" is true for the beginning of a contact
+                if ((handle1 === ballColliderHandle && handle2 === laneColliderHandle) ||
+                    (handle1 === laneColliderHandle && handle2 === ballColliderHandle)) {
+                    ballHasTouchedLane = true;
+                }
+            }
+        });
+    }
 
     // If a grab was initiated in the last frame, complete it now.
     // This one-frame delay ensures the collision group change is processed before the ball is moved.
@@ -752,14 +773,21 @@ function animate(timestamp, frame) {
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // If the ball has stopped or is out of play, and a timer isn't already running,
-                // start the end-of-turn timer.
+                // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
-                    isBallThrown = false; // Prevent this from running again until next throw
-                    rollCompletionTimer = setTimeout(() => {
-                        endTurn();
-                        rollCompletionTimer = null;
-                    }, 5000); // 5-second timer
+
+                    // A thrown ball is only valid if it has touched the lane.
+                    if (ballHasTouchedLane) {
+                        isBallThrown = false; // Prevent this from running again until next throw
+                        rollCompletionTimer = setTimeout(() => {
+                            endTurn();
+                            rollCompletionTimer = null;
+                        }, 5000); // 5-second timer
+                    } else {
+                        // If it hasn't touched the lane, it was a drop.
+                        // Reset the throw state so the player can pick it up and try again.
+                        isBallThrown = false;
+                    }
                 }
             }
         }
@@ -1071,8 +1099,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
                     .setTranslation(center.x, center.y, center.z)
                     .setRestitution(0.0)
-                    .setCollisionGroups(LANE_COLLISION_GROUP);
-                world.createCollider(cuboidDesc, laneBody);
+                    .setCollisionGroups(LANE_COLLISION_GROUP)
+                    .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+                const laneCollider = world.createCollider(cuboidDesc, laneBody);
+                laneObject.collider = laneCollider;
 
                 if (showCollision) {
                     const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
@@ -1164,7 +1194,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
     //const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(99).setFriction(25).setCollisionGroups(BALL_COLLISION_GROUP);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
     dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
@@ -1304,6 +1334,7 @@ function resetBall() {
 
         // Reset throw state
         isBallThrown = false;
+        ballHasTouchedLane = false;
     }
 }
 
@@ -1614,6 +1645,7 @@ async function init() {
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
                 isBallThrown = true;
+                ballHasTouchedLane = false; // Reset lane contact flag on throw
             }
             holdingController = null;
         }
