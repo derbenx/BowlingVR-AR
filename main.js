@@ -1049,6 +1049,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         scene.add(laneCollisionVisualizer);
     }
 
+    let ballMesh;
+
     // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
@@ -1110,6 +1112,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                     // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
                     laneCollisionVisualizer.add(visualizerMesh);
                 }
+            } else if (child.name === 'ball') {
+                ballMesh = child;
             } else {
                 // Hide other meshes in the GLB like the extra ball and pins
                 child.visible = false;
@@ -1135,17 +1139,18 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     updateFloorAndLanePosition();
 
     // Create Bowling Ball
-    const ballGltf = await loader.loadAsync('3d/ball.glb');
-    const ballMesh = ballGltf.scene;
+    // The ball is now loaded from the bowling.glb file.
+    // We need to remove it from its original parent to treat it as a separate dynamic object.
+    if (ballMesh && ballMesh.parent) {
+        ballMesh.parent.remove(ballMesh);
+    }
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
 
     // Center the geometry
     const center = ballBox.getCenter(new THREE.Vector3());
-    ballMesh.children.forEach(child => {
-        if (child.isMesh) {
-            child.geometry.translate(-center.x, -center.y, -center.z);
-        }
-    });
+    if (ballMesh.isMesh) {
+        ballMesh.geometry.translate(-center.x, -center.y, -center.z);
+    }
     ballBox.setFromObject(ballMesh); // Recalculate the box after centering
 
     const ballSize = ballBox.getSize(new THREE.Vector3());
