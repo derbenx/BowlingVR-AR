@@ -1114,8 +1114,13 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 }
             } else if (child.name === 'ball') {
                 ballMesh = child;
+            } else if (child.name.startsWith('pin')) {
+                if (!pinModel) { // Use the first pin found as the template
+                    pinModel = child;
+                }
+                child.visible = false; // Hide all original pins from the scene
             } else {
-                // Hide other meshes in the GLB like the extra ball and pins
+                // Hide other meshes in the GLB
                 child.visible = false;
             }
         }
@@ -1148,9 +1153,6 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 
     // Center the geometry
     const center = ballBox.getCenter(new THREE.Vector3());
-    if (ballMesh.isMesh) {
-        ballMesh.geometry.translate(-center.x, -center.y, -center.z);
-    }
     ballBox.setFromObject(ballMesh); // Recalculate the box after centering
 
     const ballSize = ballBox.getSize(new THREE.Vector3());
@@ -1168,25 +1170,21 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballMesh.visible = true;
 
     // Create Bowling Pins
-    const pinGltf = await loader.loadAsync('3d/pin.glb');
-    pinModel = pinGltf.scene;
-    
-    pinModel.traverse(child => {
-        if (child.isMesh) {
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
-            pinVertices = transformedVertices;
+    // The pinModel is now extracted from bowling.glb. We just need to get its vertices for the collider.
+    if (pinModel && pinModel.isMesh) {
+        pinModel.updateMatrixWorld(true);
+        const originalVertices = pinModel.geometry.attributes.position.array;
+        const transformedVertices = new Float32Array(originalVertices.length);
+        const tempVec = new THREE.Vector3();
+        for (let i = 0; i < originalVertices.length; i += 3) {
+            tempVec.set(originalVertices[i], originalVertices[i + 1], originalVertices[i + 2]);
+            tempVec.applyMatrix4(pinModel.matrixWorld);
+            transformedVertices[i] = tempVec.x;
+            transformedVertices[i + 1] = tempVec.y;
+            transformedVertices[i + 2] = tempVec.z;
         }
-    });
+        pinVertices = transformedVertices;
+    }
 
      createPins(fY + floorOffset);
 }
