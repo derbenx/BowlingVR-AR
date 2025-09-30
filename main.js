@@ -49,7 +49,7 @@ let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
-let hudButtonState = false;
+let hudButtonState = [false, false];
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
@@ -1011,8 +1011,8 @@ function animate(timestamp, frame) {
                 }
 
                 // Handle Pin HUD toggle (either controller, thumbstick press is 3)
-                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
-                    hudButtonState = true;
+                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState[i]) {
+                    hudButtonState[i] = true;
                     if (pinHUD) {
                         pinHUD.visible = !pinHUD.visible;
                         if (pinHUD.visible && laneObject) {
@@ -1024,7 +1024,7 @@ function animate(timestamp, frame) {
                         }
                     }
                 } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
-                    hudButtonState = false;
+                    hudButtonState[i] = false;
                 }
             }
         }
