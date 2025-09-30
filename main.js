@@ -769,12 +769,17 @@ function animate(timestamp, frame) {
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                const isSleeping = ball.body.isSleeping();
+                const ballIsSleeping = ball.body.isSleeping();
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // If the ball has stopped or is out of play, and a timer isn't already running...
-                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
+                // Check if all pins have settled
+                const pins = dynamicObjects.filter(obj => obj.isPin);
+                const allPinsSettled = pins.every(pin => pin.body.isSleeping());
+
+                // If the ball has stopped (or is out of play) AND all pins have settled,
+                // and a timer isn't already running...
+                if ((ballIsSleeping || isOutOfPlay) && allPinsSettled && !rollCompletionTimer) {
 
                     // A thrown ball is only valid if it has touched the lane.
                     if (ballHasTouchedLane) {
@@ -782,7 +787,7 @@ function animate(timestamp, frame) {
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
-                        }, 5000); // 5-second timer
+                        }, 2000); // 2-second settling timer
                     } else {
                         // If it hasn't touched the lane, it was a drop.
                         // Reset the throw state so the player can pick it up and try again.
@@ -1288,11 +1293,24 @@ function clearFallenPins() {
 function getFallenPins() {
     const fallenPins = [];
     const pins = dynamicObjects.filter(obj => obj.isPin);
-    const laneSurfaceY = fY_floor + floorOffset;
+
+    // It's more efficient to compute the lane's world AABB once.
+    let laneWorldAABB = null;
+    if (laneObject && laneObject.collider) {
+        const laneAabb = laneObject.collider.computeAabb();
+        const laneBodyPosition = laneObject.body.translation();
+        const lanePositionTHREE = new THREE.Vector3(laneBodyPosition.x, laneBodyPosition.y, laneBodyPosition.z);
+
+        laneWorldAABB = new THREE.Box3(
+            new THREE.Vector3(laneAabb.min.x, laneAabb.min.y, laneAabb.min.z),
+            new THREE.Vector3(laneAabb.max.x, laneAabb.max.y, laneAabb.max.z)
+        );
+        laneWorldAABB.translate(lanePositionTHREE);
+    }
 
     for (const pin of pins) {
         // A pin is considered fallen if it has tipped over OR if its center
-        // has dropped below the lane's surface (i.e., it's in the gutter or off the lane).
+        // is no longer on the lane's collider.
 
         // Check orientation
         const up = new THREE.Vector3(0, 1, 0);
@@ -1300,11 +1318,15 @@ function getFallenPins() {
         const pinUp = up.clone().applyQuaternion(quaternion);
         const isTippedOver = pinUp.y < 0.5;
 
-        // Check if pin center is below the lane surface
-        const position = pin.body.translation();
-        const isBelowLane = position.y < laneSurfaceY;
+        // Check if pin center is outside the lane's collider AABB
+        let isOffLane = true; // Default to fallen if we can't determine
+        if (laneWorldAABB) {
+            const position = pin.body.translation();
+            const pinPositionTHREE = new THREE.Vector3(position.x, position.y, position.z);
+            isOffLane = !laneWorldAABB.containsPoint(pinPositionTHREE);
+        }
 
-        if (isTippedOver || isBelowLane) {
+        if (isTippedOver || isOffLane) {
             fallenPins.push(pin);
         }
     }
