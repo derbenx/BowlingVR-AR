@@ -35,7 +35,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor;
+let pinModel, pinVertices, fY_floor, pinHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1175,35 +1175,34 @@ async function placeScene(fY, loader, world, dynamicObjects) {
      //const pinGltf = await loader.loadAsync('3d/pin.glb');
      //pinModel = pinGltf.scene;
  
-    console.log('bowling.glb > pin');
-    pinModel.traverse(child => {
-     console.log(child);
-        if (child.isMesh) {
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                //tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
-            pinVertices = transformedVertices;
-        }
-    });
+    // Create a new, perfect pin template that is both visually correct and physically stable.
+    if (pinModel && pinModel.isMesh) {
+        // 1. Clone the geometry to preserve UVs, normals, etc., for correct texturing.
+        const correctedGeometry = pinModel.geometry.clone();
 
-     createPins(fY + floorOffset);
-     
-     console.log('pin.glb');
-     
-  const pinGltf = await loader.loadAsync('3d/pin.glb');
-  pinModel = pinGltf.scene;
-  
-   pinModel.traverse(child => {
-     console.log(child);
-   });
+        // 2. Apply the mesh's world matrix to the cloned geometry's vertices to get their true positions.
+        correctedGeometry.applyMatrix4(pinModel.matrixWorld);
+
+        // 3. Calculate the true center of the transformed geometry.
+        correctedGeometry.computeBoundingBox();
+        const trueCenter = new THREE.Vector3();
+        correctedGeometry.boundingBox.getCenter(trueCenter);
+
+        // 4. Translate the geometry so its center is at the origin (0,0,0).
+        correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+
+        // 5. The corrected geometry's vertices are now perfect for the physics engine.
+        pinVertices = correctedGeometry.attributes.position.array;
+
+        // 6. Create the new pin template mesh using the corrected geometry and original material.
+        pinModel = new THREE.Mesh(correctedGeometry, pinModel.material.clone());
+
+        // 7. Calculate height from the new, correct geometry for accurate spawning.
+        pinModel.geometry.computeBoundingBox();
+        pinHeight = pinModel.geometry.boundingBox.max.y - pinModel.geometry.boundingBox.min.y;
+    }
+
+    createPins(fY + floorOffset);
   
 }
 
@@ -1214,7 +1213,8 @@ function createPins(fY) {
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
-        const initialPosition = { x: x, y: fY, z: z };
+        // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
+        const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         //const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setRestitution(.5).setMass(20).setFriction(1).setCollisionGroups(PINS_COLLISION_GROUP);
