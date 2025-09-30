@@ -1172,6 +1172,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballMesh.visible = true;
 
     // Create Bowling Pins
+     //const pinGltf = await loader.loadAsync('3d/pin.glb');
+     //pinModel = pinGltf.scene;
  
     console.log('bowling.glb > pin');
     pinModel.traverse(child => {
@@ -1195,9 +1197,11 @@ async function placeScene(fY, loader, world, dynamicObjects) {
      createPins(fY + floorOffset);
      
      console.log('pin.glb');
+     
   const pinGltf = await loader.loadAsync('3d/pin.glb');
   pinModel = pinGltf.scene;
-      pinModel.traverse(child => {
+  
+   pinModel.traverse(child => {
      console.log(child);
    });
   
