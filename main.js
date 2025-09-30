@@ -1170,20 +1170,16 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballMesh.visible = true;
 
     // Create Bowling Pins
-    // The pinModel is now extracted from bowling.glb. We just need to get its vertices for the collider.
+    // The pinModel is now extracted from bowling.glb. We need to center its geometry
+    // and then get its local vertices for the collider.
     if (pinModel && pinModel.isMesh) {
-        pinModel.updateMatrixWorld(true);
-        const originalVertices = pinModel.geometry.attributes.position.array;
-        const transformedVertices = new Float32Array(originalVertices.length);
-        const tempVec = new THREE.Vector3();
-        for (let i = 0; i < originalVertices.length; i += 3) {
-            tempVec.set(originalVertices[i], originalVertices[i + 1], originalVertices[i + 2]);
-            tempVec.applyMatrix4(pinModel.matrixWorld);
-            transformedVertices[i] = tempVec.x;
-            transformedVertices[i + 1] = tempVec.y;
-            transformedVertices[i + 2] = tempVec.z;
-        }
-        pinVertices = transformedVertices;
+        // Center the pin geometry so its local origin is at its center
+        const pinBox = new THREE.Box3().setFromObject(pinModel);
+        const pinCenter = pinBox.getCenter(new THREE.Vector3());
+        pinModel.geometry.translate(-pinCenter.x, -pinCenter.y, -pinCenter.z);
+
+        // Now that the geometry is centered, its local vertices are correct for the collider.
+        pinVertices = pinModel.geometry.attributes.position.array;
     }
 
      createPins(fY + floorOffset);
