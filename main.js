@@ -35,7 +35,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor;
+let pinModel, pinVertices, fY_floor, pinHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1175,35 +1175,34 @@ async function placeScene(fY, loader, world, dynamicObjects) {
      //const pinGltf = await loader.loadAsync('3d/pin.glb');
      //pinModel = pinGltf.scene;
  
-    console.log('bowling.glb > pin');
-    pinModel.traverse(child => {
-     console.log(child);
-        if (child.isMesh) {
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                //tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
-            pinVertices = transformedVertices;
-        }
-    });
+    // Process the pin model directly. It's a mesh, not a group, so no traversal is needed.
+    if (pinModel && pinModel.isMesh) {
+        // Calculate and store the pin's height for accurate spawning.
+        pinModel.geometry.computeBoundingBox();
+        pinHeight = pinModel.geometry.boundingBox.max.y - pinModel.geometry.boundingBox.min.y;
 
-     createPins(fY + floorOffset);
-     
-     console.log('pin.glb');
-     
-  const pinGltf = await loader.loadAsync('3d/pin.glb');
-  pinModel = pinGltf.scene;
-  
-   pinModel.traverse(child => {
-     console.log(child);
-   });
+        // Re-center the geometry to ensure the physics body has a stable center of mass.
+        const center = new THREE.Vector3();
+        pinModel.geometry.boundingBox.getCenter(center);
+
+        // Create a new set of vertices for the physics collider, centered around (0,0,0).
+        const originalVertices = pinModel.geometry.attributes.position.array;
+        const centeredVertices = new Float32Array(originalVertices.length);
+        for (let i = 0; i < originalVertices.length; i += 3) {
+            centeredVertices[i]   = originalVertices[i] - center.x;
+            centeredVertices[i+1] = originalVertices[i+1] - center.y;
+            centeredVertices[i+2] = originalVertices[i+2] - center.z;
+        }
+        pinVertices = centeredVertices;
+
+        // Translate the visual model's geometry to match the new centered origin.
+        pinModel.geometry.translate(-center.x, -center.y, -center.z);
+
+        // Adjust the mesh's position to compensate for the geometry translation.
+        pinModel.position.add(center);
+    }
+
+    createPins(fY + floorOffset);
   
 }
 
@@ -1214,7 +1213,8 @@ function createPins(fY) {
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
-        const initialPosition = { x: x, y: fY, z: z };
+        // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
+        const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         //const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setRestitution(.5).setMass(20).setFriction(1).setCollisionGroups(PINS_COLLISION_GROUP);
