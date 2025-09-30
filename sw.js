@@ -52,7 +52,14 @@ if (!swEnabled) {
         'js/three/examples/jsm/webxr/ARButton.js',
         'js/three/examples/jsm/geometries/ConvexGeometry.js',
         'js/three/examples/jsm/webxr/XRPlanes.js',
-        'js/three/examples/jsm/webxr/XRControllerModelFactory.js'
+        'js/three/examples/jsm/webxr/XRControllerModelFactory.js',
+        './favicon/512x512.png',
+        './favicon/192x192.png',
+        './favicon/180x180.png',
+        './favicon/32x32.png',
+        './favicon/16x16.png',
+        './favicon/screenshot.png',
+        './favicon/favicon.ico'
     ];
 
     self.addEventListener('install', event => {

@@ -471,7 +471,7 @@ function processRoll() {
     if (isGameOver) return;
 
     const fallenPins = getFallenPins();
-    const fallenThisRoll = fallenPins.length - pinsDownLastRoll;
+    const fallenThisRoll = Math.max(0, fallenPins.length - pinsDownLastRoll);
 
     if (currentFrame === 9) {
         processTenthFrameRoll(fallenPins, fallenThisRoll);
@@ -1258,15 +1258,23 @@ function clearFallenPins() {
 function getFallenPins() {
     const fallenPins = [];
     const pins = dynamicObjects.filter(obj => obj.isPin);
+    const laneSurfaceY = fY_floor + floorOffset;
 
     for (const pin of pins) {
+        // A pin is considered fallen if it has tipped over OR if its center
+        // has dropped below the lane's surface (i.e., it's in the gutter or off the lane).
+
         // Check orientation
         const up = new THREE.Vector3(0, 1, 0);
         const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
         const pinUp = up.clone().applyQuaternion(quaternion);
         const isTippedOver = pinUp.y < 0.5;
 
-        if (isTippedOver) {
+        // Check if pin center is below the lane surface
+        const position = pin.body.translation();
+        const isBelowLane = position.y < laneSurfaceY;
+
+        if (isTippedOver || isBelowLane) {
             fallenPins.push(pin);
         }
     }
