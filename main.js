@@ -20,11 +20,11 @@ const GROUP_FLOOR = 1 << 3;
 const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL | GROUP_PINS);
 // Ball collides with Lane, Pins, and Floor
 const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GROUP_FLOOR);
-// Held ball collides with Lane and Floor
-const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_FLOOR);
-// Pins collide with the Ball, other Pins, and the Lane (but NOT the infinite floor)
+// Held ball collides with Floor
+const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_FLOOR);
+// Pins collide with the Ball, other Pins, and the Lane and floor
 const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE| GROUP_FLOOR);
-// Floor collides with the Ball ONLY
+// Floor collides with the Ball ands pins
 const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -1033,7 +1033,7 @@ function animate(timestamp, frame) {
 
 async function placeScene(fY, loader, world, dynamicObjects) {
     // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/lane.glb');
+    const laneGltf = await loader.loadAsync('3d/bowling.glb');
 
         // Visual ground and Physics Ground
         const groundMesh = laneGltf.scene;
@@ -1044,43 +1044,83 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         const laneBody = world.createRigidBody(laneBodyDesc);
         laneObject = { mesh: groundMesh, body: laneBody };
 
-    // Create a trimesh collider that is correctly scaled to the visual model
+    if (showCollision) {
+        laneCollisionVisualizer = new THREE.Group();
+        scene.add(laneCollisionVisualizer);
+    }
+
+    let ballMesh;
+
+    // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
             child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            // The body is at the origin, so its position is (0,0,0).
-            // This means the transformed vertices will be in the body's local space, which is what we want.
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                // 1. Transform vertex to world space using the mesh's world matrix
-                tempVec.applyMatrix4(child.matrixWorld);
-                // 2. Transform vertex from world space to the rigid body's local space
-                tempVec.sub(bodyPosition);
+            if (child.name === 'lane') {
+              //child.visible = false;
+                // Create a box collider for the lane for more reliable physics
+                const boundingBox = new THREE.Box3().setFromObject(child);
+                const size = boundingBox.getSize(new THREE.Vector3());
+                const center = boundingBox.getCenter(new THREE.Vector3());
 
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
+                // The collider's position is relative to the rigid body. Since the body is at the origin,
+                // the collider's translation is the mesh's world center.
+                center.sub(bodyPosition);
 
-            const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
-            world.createCollider(trimeshDesc, laneBody);
+                const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
+                    .setTranslation(center.x, center.y, center.z)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(cuboidDesc, laneBody);
 
-            if (showCollision){
-                // Create and add the visualizer mesh
-                const visualizerGeo = new THREE.BufferGeometry();
-                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-                // Position it at the rigid body's location (which is currently the origin)
-                laneCollisionVisualizer.position.copy(bodyPosition);
-                scene.add(laneCollisionVisualizer);
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    visualizerMesh.position.copy(center);
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
+
+            } else if (child.name === 'gutter') {
+                // Create a trimesh collider for the gutter to match its complex shape
+                const originalVertices = child.geometry.attributes.position.array;
+                const transformedVertices = new Float32Array(originalVertices.length);
+                const tempVec = new THREE.Vector3();
+
+                for (let i = 0; i < originalVertices.length; i += 3) {
+                    tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                    // Transform vertex to world space, then to the rigid body's local space
+                    tempVec.applyMatrix4(child.matrixWorld);
+                    tempVec.sub(bodyPosition);
+                    transformedVertices[i] = tempVec.x;
+                    transformedVertices[i+1] = tempVec.y;
+                    transformedVertices[i+2] = tempVec.z;
+                }
+
+                const indices = child.geometry.index.array;
+                const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                world.createCollider(trimeshDesc, laneBody);
+
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BufferGeometry();
+                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+                    visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
+            } else if (child.name === 'ball') {
+                ballMesh = child;
+            } else if (child.name === 'pin') {
+                pinModel = child;
+                child.visible = false; // Hide all original pins from the scene
+            } else {
+                // Hide other meshes in the GLB
+                child.visible = false;
             }
         }
     });
@@ -1103,17 +1143,18 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     updateFloorAndLanePosition();
 
     // Create Bowling Ball
-    const ballGltf = await loader.loadAsync('3d/ball.glb');
-    const ballMesh = ballGltf.scene;
+    // The ball is now loaded from the bowling.glb file.
+    // We need to remove it from its original parent to treat it as a separate dynamic object.
+    if (ballMesh && ballMesh.parent) {
+        ballMesh.parent.remove(ballMesh);
+    }
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
 
     // Center the geometry
     const center = ballBox.getCenter(new THREE.Vector3());
-    ballMesh.children.forEach(child => {
-        if (child.isMesh) {
-            child.geometry.translate(-center.x, -center.y, -center.z);
-        }
-    });
+    //if (ballMesh.isMesh) {
+        //ballMesh.geometry.translate(-center.x, -center.y, -center.z);
+    //}
     ballBox.setFromObject(ballMesh); // Recalculate the box after centering
 
     const ballSize = ballBox.getSize(new THREE.Vector3());
@@ -1131,10 +1172,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballMesh.visible = true;
 
     // Create Bowling Pins
-    const pinGltf = await loader.loadAsync('3d/pin.glb');
-    pinModel = pinGltf.scene;
-    
+ 
+    console.log('bowling.glb > pin');
     pinModel.traverse(child => {
+     console.log(child);
         if (child.isMesh) {
             child.updateMatrixWorld(true);
             const originalVertices = child.geometry.attributes.position.array;
@@ -1142,7 +1183,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const tempVec = new THREE.Vector3();
             for (let i = 0; i < originalVertices.length; i += 3) {
                 tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                tempVec.applyMatrix4(child.matrixWorld);
+                //tempVec.applyMatrix4(child.matrixWorld);
                 transformedVertices[i] = tempVec.x;
                 transformedVertices[i+1] = tempVec.y;
                 transformedVertices[i+2] = tempVec.z;
@@ -1152,7 +1193,17 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     });
 
      createPins(fY + floorOffset);
+     
+     console.log('pin.glb');
+  const pinGltf = await loader.loadAsync('3d/pin.glb');
+  pinModel = pinGltf.scene;
+      pinModel.traverse(child => {
+     console.log(child);
+   });
+  
 }
+
+
 
 function createPins(fY) {
     let pinIdCounter = 0;
