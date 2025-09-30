@@ -1175,50 +1175,29 @@ async function placeScene(fY, loader, world, dynamicObjects) {
      //const pinGltf = await loader.loadAsync('3d/pin.glb');
      //pinModel = pinGltf.scene;
  
-    // Rebuild the pin model from scratch to ensure a perfect 1-to-1 match
-    // between the visual mesh and the physics collider, resolving any transformation issues.
+    // Create a new, perfect pin template that is both visually correct and physically stable.
     if (pinModel && pinModel.isMesh) {
-        // 1. Get true world-space vertices by applying the matrixWorld to the raw geometry.
-        pinModel.updateMatrixWorld(true);
-        const rawVertices = pinModel.geometry.attributes.position.array;
-        const transformedVertices = new Float32Array(rawVertices.length);
-        const tempVec = new THREE.Vector3();
+        // 1. Clone the geometry to preserve UVs, normals, etc., for correct texturing.
+        const correctedGeometry = pinModel.geometry.clone();
 
-        for (let i = 0; i < rawVertices.length; i += 3) {
-            tempVec.set(rawVertices[i], rawVertices[i+1], rawVertices[i+2]);
-            tempVec.applyMatrix4(pinModel.matrixWorld);
-            transformedVertices[i] = tempVec.x;
-            transformedVertices[i+1] = tempVec.y;
-            transformedVertices[i+2] = tempVec.z;
-        }
+        // 2. Apply the mesh's world matrix to the cloned geometry's vertices to get their true positions.
+        correctedGeometry.applyMatrix4(pinModel.matrixWorld);
 
-        // 2. Calculate the true center of these world-space vertices.
-        const tempGeometryForCentering = new THREE.BufferGeometry();
-        tempGeometryForCentering.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-        tempGeometryForCentering.computeBoundingBox();
+        // 3. Calculate the true center of the transformed geometry.
+        correctedGeometry.computeBoundingBox();
         const trueCenter = new THREE.Vector3();
-        tempGeometryForCentering.boundingBox.getCenter(trueCenter);
+        correctedGeometry.boundingBox.getCenter(trueCenter);
 
-        // 3. Create the final, centered vertices for the physics body.
-        // This is the canonical data for the pin's shape.
-        const centeredPhysicsVertices = new Float32Array(transformedVertices.length);
-        for (let i = 0; i < transformedVertices.length; i += 3) {
-            centeredPhysicsVertices[i]   = transformedVertices[i] - trueCenter.x;
-            centeredPhysicsVertices[i+1] = transformedVertices[i+1] - trueCenter.y;
-            centeredPhysicsVertices[i+2] = transformedVertices[i+2] - trueCenter.z;
-        }
-        pinVertices = centeredPhysicsVertices;
+        // 4. Translate the geometry so its center is at the origin (0,0,0).
+        correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
 
-        // 4. Create a new, perfect pin template mesh from the centered geometry.
-        // This ensures the visual model is identical to the physics model.
-        const newPinGeometry = new THREE.BufferGeometry();
-        newPinGeometry.setAttribute('position', new THREE.BufferAttribute(pinVertices, 3));
+        // 5. The corrected geometry's vertices are now perfect for the physics engine.
+        pinVertices = correctedGeometry.attributes.position.array;
 
-        const newPinMaterial = pinModel.material.clone();
+        // 6. Create the new pin template mesh using the corrected geometry and original material.
+        pinModel = new THREE.Mesh(correctedGeometry, pinModel.material.clone());
 
-        pinModel = new THREE.Mesh(newPinGeometry, newPinMaterial);
-
-        // 5. Calculate height from the new, correct geometry for accurate spawning.
+        // 7. Calculate height from the new, correct geometry for accurate spawning.
         pinModel.geometry.computeBoundingBox();
         pinHeight = pinModel.geometry.boundingBox.max.y - pinModel.geometry.boundingBox.min.y;
     }
