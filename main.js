@@ -1294,21 +1294,21 @@ function getFallenPins() {
     const fallenPins = [];
     const pins = dynamicObjects.filter(obj => obj.isPin);
 
-    // It's more efficient to compute the lane's world AABB once.
     let laneWorldAABB = null;
-    if (laneObject && laneObject.collider) {
-        // The method to get the world-space AABB is .aabb in this version.
-        const laneAabb = laneObject.collider.aabb;
-
-        laneWorldAABB = new THREE.Box3(
-            new THREE.Vector3(laneAabb.min.x, laneAabb.min.y, laneAabb.min.z),
-            new THREE.Vector3(laneAabb.max.x, laneAabb.max.y, laneAabb.max.z)
-        );
+    if (laneObject && laneObject.body) {
+        // computeAabb() on the rigid body gives the world-space AABB.
+        const laneAabb = laneObject.body.computeAabb();
+        if (laneAabb) {
+            laneWorldAABB = new THREE.Box3(
+                new THREE.Vector3(laneAabb.min.x, laneAabb.min.y, laneAabb.min.z),
+                new THREE.Vector3(laneAabb.max.x, laneAabb.max.y, laneAabb.max.z)
+            );
+        }
     }
 
     for (const pin of pins) {
         // A pin is considered fallen if it has tipped over OR if its center
-        // is no longer on the lane's collider.
+        // is no longer on the lane.
 
         // Check orientation
         const up = new THREE.Vector3(0, 1, 0);
@@ -1316,7 +1316,7 @@ function getFallenPins() {
         const pinUp = up.clone().applyQuaternion(quaternion);
         const isTippedOver = pinUp.y < 0.5;
 
-        // Check if pin center is outside the lane's collider AABB
+        // Check if pin center is outside the lane's AABB
         let isOffLane = true; // Default to fallen if we can't determine
         if (laneWorldAABB) {
             const position = pin.body.translation();
