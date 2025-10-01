@@ -768,24 +768,47 @@ function animate(timestamp, frame) {
         // --- SCORING LOGIC: Roll Completion Detection ---
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
             const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball) {
-                const isSleeping = ball.body.isSleeping();
+            if (ball && !rollCompletionTimer) { // Only check if a timer isn't already running
+                const ballIsSleeping = ball.body.isSleeping();
                 const ballLocation = getBallLocationState();
-                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+                const pinsAreMoving = arePinsMoving();
 
-                // If the ball has stopped or is out of play, and a timer isn't already running...
-                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
-
-                    // A thrown ball is only valid if it has touched the lane.
+                // Condition 1: Everything has stopped moving.
+                if (ballIsSleeping && !pinsAreMoving) {
                     if (ballHasTouchedLane) {
-                        isBallThrown = false; // Prevent this from running again until next throw
-                        rollCompletionTimer = setTimeout(() => {
-                            endTurn();
-                            rollCompletionTimer = null;
-                        }, 5000); // 5-second timer
+                        isBallThrown = false;
+                        endTurn();
                     } else {
-                        // If it hasn't touched the lane, it was a drop.
-                        // Reset the throw state so the player can pick it up and try again.
+                        // Ball was thrown but didn't hit the lane and has stopped.
+                        // This is a dropped ball, not a valid turn.
+                        isBallThrown = false;
+                    }
+                    return; // End of check for this frame
+                }
+
+                // Condition 2: Ball is out of play, but pins might still be moving.
+                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+                if (isOutOfPlay) {
+                    if (ballHasTouchedLane) {
+                        isBallThrown = false; // The turn is committed, prevent re-triggering.
+                        // Start a 4-second timer to wait for pins to settle.
+                        rollCompletionTimer = setTimeout(() => {
+                            // After 4 seconds, check if pins are still moving.
+                            if (arePinsMoving()) {
+                                // If yes, start a final 2-second timer.
+                                rollCompletionTimer = setTimeout(() => {
+                                    endTurn();
+                                    rollCompletionTimer = null;
+                                }, 2000);
+                            } else {
+                                // If no, end the turn immediately.
+                                endTurn();
+                                rollCompletionTimer = null;
+                            }
+                        }, 4000);
+                    } else {
+                        // Ball went straight to gutter/ground without touching lane.
+                        // Not a valid turn.
                         isBallThrown = false;
                     }
                 }
@@ -1309,6 +1332,16 @@ function getFallenPins() {
         }
     }
     return fallenPins;
+}
+
+function arePinsMoving() {
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    for (const pin of pins) {
+        if (!pin.body.isSleeping()) {
+            return true; // Found a moving pin
+        }
+    }
+    return false; // All pins are stationary
 }
 
 function resetBall() {
