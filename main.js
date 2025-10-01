@@ -1309,11 +1309,13 @@ function getPinContacts(pinObject) {
     const pinUp = up.clone().applyQuaternion(quaternion);
     const isTippedOver = pinUp.y < 0.9962;
 
-    // Check if touching ground or gutter
-    const isTouchingHazard = contacts.includes('ground') || contacts.includes('gutter');
+    // Check if pin center is below the lane surface (more reliable than contact detection for this)
+    const laneSurfaceY = fY_floor + floorOffset;
+    const position = pinObject.body.translation();
+    const isBelowLane = position.y < laneSurfaceY;
 
     // Update pin state if it's not already fallen. Once fallen, it stays fallen.
-    if (!pinObject.isFallen && (isTippedOver || isTouchingHazard)) {
+    if (!pinObject.isFallen && (isTippedOver || isBelowLane)) {
         pinObject.isFallen = true;
     }
 
