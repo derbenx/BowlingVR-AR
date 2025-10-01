@@ -748,6 +748,11 @@ function animate(timestamp, frame) {
     renderer.render(scene, camera);
 
     if (pinHUD && pinHUD.visible) {
+        // Update pin states in real-time for the HUD before drawing it
+        const pins = dynamicObjects.filter(obj => obj.isPin);
+        for (const pin of pins) {
+            getPinContacts(pin);
+        }
         drawPinHUD();
     }
 
@@ -779,16 +784,17 @@ function animate(timestamp, frame) {
                 // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
 
-                    // A thrown ball is only valid if it has touched the lane.
-                    if (ballHasTouchedLane) {
+                    // A direct gutter ball is a valid play.
+                    // Any other valid play requires the ball to have touched the lane first.
+                    if (ballLocation === 'gutter' || ballHasTouchedLane) {
                         isBallThrown = false; // Prevent this from running again until next throw
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
                         }, 5000); // 5-second timer
                     } else {
-                        // If it hasn't touched the lane, it was a drop.
-                        // Reset the throw state so the player can pick it up and try again.
+                        // This case handles a ball dropped on the ground without touching the lane.
+                        // It's not a valid play, so just reset the throw state.
                         isBallThrown = false;
                     }
                 }
