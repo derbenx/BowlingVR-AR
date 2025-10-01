@@ -1297,15 +1297,13 @@ function getFallenPins() {
     // It's more efficient to compute the lane's world AABB once.
     let laneWorldAABB = null;
     if (laneObject && laneObject.collider) {
-        const laneAabb = laneObject.collider.computeAabb();
-        const laneBodyPosition = laneObject.body.translation();
-        const lanePositionTHREE = new THREE.Vector3(laneBodyPosition.x, laneBodyPosition.y, laneBodyPosition.z);
+        // The method to get the world-space AABB is .aabb() in this version.
+        const laneAabb = laneObject.collider.aabb();
 
         laneWorldAABB = new THREE.Box3(
             new THREE.Vector3(laneAabb.min.x, laneAabb.min.y, laneAabb.min.z),
             new THREE.Vector3(laneAabb.max.x, laneAabb.max.y, laneAabb.max.z)
         );
-        laneWorldAABB.translate(lanePositionTHREE);
     }
 
     for (const pin of pins) {
