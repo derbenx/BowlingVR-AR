@@ -42,9 +42,6 @@ let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
-let pinsFallenResetTimer = null;
-let rollCompletionTimer = null;
-let allPinsFallen = false;
 let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
@@ -58,8 +55,6 @@ let scoreData = [];
 let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
-let isBallThrown = false;
-let ballHasTouchedLane = false;
 let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
@@ -71,6 +66,41 @@ let showButtons = 0;
 let laneCollisionVisualizer = null;
 const loader = new GLTFLoader();
 let sceneSetupInitiated = false;
+
+// --- New State Management & Physics Objects ---
+const colliderToObjectMap = new Map();
+
+const GameState = {
+    READY_TO_THROW: 'READY_TO_THROW',
+    BALL_IN_PLAY: 'BALL_IN_PLAY',
+    AWAITING_BALL_STOP: 'AWAITING_BALL_STOP',
+    PINS_SETTLING: 'PINS_SETTLING',
+    SCORING: 'SCORING',
+    TURN_OVER: 'TURN_OVER'
+};
+
+const gameManager = {
+    state: GameState.READY_TO_THROW,
+    ballHasTouchedLane: false,
+    cleanupTimer: null,
+    pinSettleTimer: null,
+
+    setState(newState) {
+        if (this.state !== newState) {
+            console.log(`Game State changing from ${this.state} to ${newState}`);
+            this.state = newState;
+        }
+    },
+
+    resetForNextThrow() {
+        this.ballHasTouchedLane = false;
+        if (this.cleanupTimer) clearTimeout(this.cleanupTimer);
+        if (this.pinSettleTimer) clearTimeout(this.pinSettleTimer);
+        this.cleanupTimer = null;
+        this.pinSettleTimer = null;
+        this.setState(GameState.READY_TO_THROW);
+    }
+};
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
@@ -440,31 +470,23 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 }
 
 function endTurn() {
-    // This is the new central function to manage the game state after a roll.
-    // 1. It processes the score.
-    // 2. It checks if the game is over.
-    // 3. It determines whether to do a full reset or just prepare for the next roll.
-
     processRoll(); // Update scores first
 
     if (isGameOver) {
-        // processRoll already handles the 'Game Over' dialog
-        return;
+        return; // processRoll handles the 'Game Over' dialog
     }
 
-    // After a strike or the second roll of a frame, processRoll sets currentRoll to 0.
-    // This is our cue for a full pin reset.
+    // After a strike or the second roll of a frame, reset everything.
     if (currentRoll === 0) {
         resetPins();
+        gameManager.resetForNextThrow();
     }
-    // Otherwise, it was the first roll of a frame, so we just hide the fallen pins
-    // and reset the ball for the second shot.
+    // Otherwise, it was the first roll of a frame.
+    // We just reset the ball and let the player take their second shot.
+    // The fallen pins from the first roll remain gone.
     else {
-        const fallenPins = getFallenPins();
-        for (const pin of fallenPins) {
-            pin.mesh.visible = false;
-        }
         resetBall();
+        gameManager.resetForNextThrow();
     }
 }
 
@@ -527,35 +549,27 @@ function drawPinHUD() {
     ctx.fillStyle = 'rgba(0, 0, 0, 0.0)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    // Pin positions in a standard bowling triangle layout
     const pinLayout = [
-        { x: 128, y: 200 }, // Pin 1 (front)
-        { x: 108, y: 170 }, { x: 148, y: 170 }, // Row 2
-        { x: 88, y: 140 }, { x: 128, y: 140 }, { x: 168, y: 140 }, // Row 3
-        { x: 68, y: 110 }, { x: 108, y: 110 }, { x: 148, y: 110 }, { x: 188, y: 110 }, // Row 4
+        { x: 128, y: 200 }, { x: 108, y: 170 }, { x: 148, y: 170 },
+        { x: 88, y: 140 }, { x: 128, y: 140 }, { x: 168, y: 140 },
+        { x: 68, y: 110 }, { x: 108, y: 110 }, { x: 148, y: 110 }, { x: 188, y: 110 },
     ];
 
-    // Draw triangle outline
     ctx.beginPath();
-    ctx.moveTo(pinLayout[0].x, pinLayout[0].y + 20); // Bottom point
-    ctx.lineTo(pinLayout[6].x - 20, pinLayout[6].y - 20); // Top-left
-    ctx.lineTo(pinLayout[9].x + 20, pinLayout[9].y - 20); // Top-right
+    ctx.moveTo(pinLayout[0].x, pinLayout[0].y + 20);
+    ctx.lineTo(pinLayout[6].x - 20, pinLayout[6].y - 20);
+    ctx.lineTo(pinLayout[9].x + 20, pinLayout[9].y - 20);
     ctx.closePath();
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    const pins = dynamicObjects.filter(obj => obj.isPin);
+    const pins = dynamicObjects.filter(obj => obj.type === 'pin');
 
     pinLayout.forEach((pos, index) => {
-        let isStanding = false;
-        const pin = pins.find(p => p.pinId === index); // Find pin by its unique ID
-        if (pin) {
-            const up = new THREE.Vector3(0, 1, 0);
-            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-            const pinUp = up.clone().applyQuaternion(quaternion);
-            isStanding = pinUp.y >= 0.5;
-        }
+        const pin = pins.find(p => p.id === index);
+        // A pin is standing if it exists and is NOT fallen.
+        const isStanding = pin && !isPinFallen(pin);
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
@@ -685,25 +699,11 @@ function animate(timestamp, frame) {
     }
 
     // Step the physics world first
-    if(world) world.step(eventQueue);
-
-    // --- COLLISION EVENT HANDLING ---
-    if (eventQueue) {
-        eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (!ball || !laneObject || !laneObject.collider) return;
-
-            const ballColliderHandle = ball.collider.handle;
-            const laneColliderHandle = laneObject.collider.handle;
-
-            // Check if the collision involves the ball and the lane
-            if (started) { // "started" is true for the beginning of a contact
-                if ((handle1 === ballColliderHandle && handle2 === laneColliderHandle) ||
-                    (handle1 === laneColliderHandle && handle2 === ballColliderHandle)) {
-                    ballHasTouchedLane = true;
-                }
-            }
-        });
+    if(world) {
+        if (renderer.xr.isPresenting && gameMode === 'scoring' && !isGameOver) {
+            updateGameState();
+        }
+        world.step();
     }
 
     // If a grab was initiated in the last frame, complete it now.
@@ -765,32 +765,6 @@ function animate(timestamp, frame) {
             }
         }
 
-        // --- SCORING LOGIC: Roll Completion Detection ---
-        if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball) {
-                const isSleeping = ball.body.isSleeping();
-                const ballLocation = getBallLocationState();
-                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
-
-                // If the ball has stopped or is out of play, and a timer isn't already running...
-                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
-
-                    // A thrown ball is only valid if it has touched the lane.
-                    if (ballHasTouchedLane) {
-                        isBallThrown = false; // Prevent this from running again until next throw
-                        rollCompletionTimer = setTimeout(() => {
-                            endTurn();
-                            rollCompletionTimer = null;
-                        }, 5000); // 5-second timer
-                    } else {
-                        // If it hasn't touched the lane, it was a drop.
-                        // Reset the throw state so the player can pick it up and try again.
-                        isBallThrown = false;
-                    }
-                }
-            }
-        }
 
         const dt = world.integrationParameters.dt;
         for (let i = 0; i < 2; i++) {
@@ -1060,17 +1034,13 @@ function animate(timestamp, frame) {
 }
 
 async function placeScene(fY, loader, world, dynamicObjects) {
-    // Load Lane Model
+    colliderToObjectMap.clear();
+
     const laneGltf = await loader.loadAsync('3d/bowling.glb');
-
-        // Visual ground and Physics Ground
-        const groundMesh = laneGltf.scene;
-
-        // Create a fixed rigid body for the lane at the origin.
-        // We will set its final position after creating all components.
-        const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
-        const laneBody = world.createRigidBody(laneBodyDesc);
-        laneObject = { mesh: groundMesh, body: laneBody };
+    const groundMesh = laneGltf.scene;
+    const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
+    const laneBody = world.createRigidBody(laneBodyDesc);
+    laneObject = { mesh: groundMesh, body: laneBody, type: 'lane_root' };
 
     if (showCollision) {
         laneCollisionVisualizer = new THREE.Group();
@@ -1079,77 +1049,38 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 
     let ballMesh;
 
-    // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
-            child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
-            const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
+            child.updateMatrixWorld(true);
+            const bodyPosition = new THREE.Vector3().copy(laneBody.translation());
 
             if (child.name === 'lane') {
-              //child.visible = false;
-                // Create a box collider for the lane for more reliable physics
                 const boundingBox = new THREE.Box3().setFromObject(child);
                 const size = boundingBox.getSize(new THREE.Vector3());
                 const center = boundingBox.getCenter(new THREE.Vector3());
-
-                // The collider's position is relative to the rigid body. Since the body is at the origin,
-                // the collider's translation is the mesh's world center.
                 center.sub(bodyPosition);
 
                 const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
                     .setTranslation(center.x, center.y, center.z)
-                    .setRestitution(0.0)
-                    .setCollisionGroups(LANE_COLLISION_GROUP)
-                    .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
-                const laneCollider = world.createCollider(cuboidDesc, laneBody);
-                laneObject.collider = laneCollider;
-
-                if (showCollision) {
-                    const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
-                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
-                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
-                    visualizerMesh.position.copy(center);
-                    laneCollisionVisualizer.add(visualizerMesh);
-                }
+                    .setSensor(true);
+                const collider = world.createCollider(cuboidDesc, laneBody);
+                colliderToObjectMap.set(collider.handle, { type: 'lane' });
+                laneObject.collider = collider; // Keep a reference for legacy code if needed
 
             } else if (child.name === 'gutter') {
-                // Create a trimesh collider for the gutter to match its complex shape
-                const originalVertices = child.geometry.attributes.position.array;
-                const transformedVertices = new Float32Array(originalVertices.length);
-                const tempVec = new THREE.Vector3();
-
-                for (let i = 0; i < originalVertices.length; i += 3) {
-                    tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                    // Transform vertex to world space, then to the rigid body's local space
-                    tempVec.applyMatrix4(child.matrixWorld);
-                    tempVec.sub(bodyPosition);
-                    transformedVertices[i] = tempVec.x;
-                    transformedVertices[i+1] = tempVec.y;
-                    transformedVertices[i+2] = tempVec.z;
-                }
-
+                const vertices = child.geometry.attributes.position.array;
                 const indices = child.geometry.index.array;
-                const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
-                    .setRestitution(0.0)
-                    .setCollisionGroups(LANE_COLLISION_GROUP);
-                world.createCollider(trimeshDesc, laneBody);
+                const trimeshDesc = RAPIER.ColliderDesc.trimesh(new Float32Array(vertices), new Uint32Array(indices))
+                    .setSensor(true);
+                const collider = world.createCollider(trimeshDesc, laneBody);
+                colliderToObjectMap.set(collider.handle, { type: 'gutter' });
 
-                if (showCollision) {
-                    const visualizerGeo = new THREE.BufferGeometry();
-                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-                    visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
-                    // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
-                    laneCollisionVisualizer.add(visualizerMesh);
-                }
             } else if (child.name === 'ball') {
                 ballMesh = child;
             } else if (child.name === 'pin') {
                 pinModel = child;
-                child.visible = false; // Hide all original pins from the scene
+                child.visible = false;
             } else {
-                // Hide other meshes in the GLB
                 child.visible = false;
             }
         }
@@ -1164,10 +1095,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Create an infinite floor plane to prevent objects from falling through
     const floorBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0, fY_floor - 0.25, 0);
     floorBody = world.createRigidBody(floorBodyDesc);
-    const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
-        .setCollisionGroups(FLOOR_COLLISION_GROUP)
+    const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100)
         .setRestitution(0.2);
-    world.createCollider(floorColliderDesc, floorBody);
+    const floorCollider = world.createCollider(floorColliderDesc, floorBody);
+    colliderToObjectMap.set(floorCollider.handle, { type: 'ground' });
 
     // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
@@ -1193,11 +1124,12 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    //const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(99).setFriction(25).setCollisionGroups(BALL_COLLISION_GROUP);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setMass(5.0).setRestitution(0.01).setFriction(0.1);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
+    const ballObject = { mesh: ballMesh, body: ballBody, type: 'ball', isBall: true, initialPosition: ballInitialPosition, collider: ballCollider };
+    dynamicObjects.push(ballObject);
+    colliderToObjectMap.set(ballCollider.handle, ballObject);
     scene.add(ballMesh);
     ballMesh.visible = true;
 
@@ -1243,14 +1175,16 @@ function createPins(fY) {
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
-        // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
         const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
-        //const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setRestitution(.5).setMass(20).setFriction(1).setCollisionGroups(PINS_COLLISION_GROUP);
-        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
+        const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setMass(1.5).setRestitution(0.5).setFriction(0.2);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
+
+        const pinObject = { mesh: pinMesh, body: pinBody, type: 'pin', isPin: true, id: id, pinId: id, initialPosition: initialPosition };
+        dynamicObjects.push(pinObject);
+        colliderToObjectMap.set(collider.handle, pinObject);
+
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -1267,48 +1201,79 @@ function createPins(fY) {
     }
 }
 
-function clearFallenPins() {
-    // This function correctly removes fallen pins from the simulation.
-    // 1. It gets a list of fallen pins.
-    // 2. It removes the visual mesh from the Three.js scene.
-    // 3. It removes the physics body from the Rapier world.
-    // 4. It filters the pin object out of the master dynamicObjects array,
-    //    ensuring it's gone from all future physics steps and lookups.
-    const fallenPins = getFallenPins();
-    if (fallenPins.length > 0) {
-        for (const pin of fallenPins) {
+function clearFallenPins(isFreePlay = false) {
+    const pinsToRemove = dynamicObjects.filter(p => p.type === 'pin' && isPinFallen(p));
+
+    for (const pin of pinsToRemove) {
+        const index = dynamicObjects.findIndex(o => o === pin);
+        if (index > -1) {
             scene.remove(pin.mesh);
             world.removeRigidBody(pin.body);
+            colliderToObjectMap.delete(pin.body.collider(0).handle);
+            dynamicObjects.splice(index, 1);
         }
-        // Filter out the removed pins from dynamicObjects
-        dynamicObjects = dynamicObjects.filter(obj => !fallenPins.includes(obj));
+    }
+
+    // In freeplay, we clear fallen pins after every throw.
+    // In scoring, this is handled by the endTurn logic.
+    if (isFreePlay) {
+        resetBall();
     }
 }
 
-function getFallenPins() {
-    const fallenPins = [];
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-    const laneSurfaceY = fY_floor + floorOffset;
+// --- New Core Logic Functions ---
 
-    for (const pin of pins) {
-        // A pin is considered fallen if it has tipped over OR if its center
-        // has dropped below the lane's surface (i.e., it's in the gutter or off the lane).
+function isMoving(body) {
+    const linvel = body.linvel();
+    const angvel = body.angvel();
+    const linearSpeedSq = linvel.x ** 2 + linvel.y ** 2 + linvel.z ** 2;
+    const angularSpeedSq = angvel.x ** 2 + angvel.y ** 2 + angvel.z ** 2;
+    const linearThresholdSq = 0.01 ** 2;
+    const angularThresholdSq = 0.1 ** 2;
+    return linearSpeedSq > linearThresholdSq || angularSpeedSq > angularThresholdSq;
+}
 
-        // Check orientation
-        const up = new THREE.Vector3(0, 1, 0);
-        const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-        const pinUp = up.clone().applyQuaternion(quaternion);
-        const isTippedOver = pinUp.y < 0.5;
+function getContactingObjects(body) {
+    const contactingObjects = new Set();
+    if (!world || !body) return [];
+    const bodyColliderHandle = body.collider(0)?.handle;
+    if (bodyColliderHandle === undefined) return [];
 
-        // Check if pin center is below the lane surface
-        const position = pin.body.translation();
-        const isBelowLane = position.y < laneSurfaceY;
+    world.contactPairsWith(body.collider(0), (collider1, collider2) => {
+        const otherColliderHandle = collider1.handle === bodyColliderHandle ? collider2.handle : collider1.handle;
+        const contactObject = colliderToObjectMap.get(otherColliderHandle);
+        if (contactObject) {
+            contactingObjects.add(contactObject);
+        }
+    });
 
-        if (isTippedOver || isBelowLane) {
-            fallenPins.push(pin);
+    return Array.from(contactingObjects);
+}
+
+function isPinFallen(pinObject) {
+    // 1. Check orientation
+    const upVector = new THREE.Vector3(0, 1, 0);
+    const pinUp = upVector.clone().applyQuaternion(pinObject.mesh.quaternion);
+    const angle = pinUp.angleTo(new THREE.Vector3(0, 1, 0));
+    const maxAngle = THREE.MathUtils.degToRad(5);
+    if (angle > maxAngle) {
+        return true;
+    }
+
+    // 2. Check for contact with ground or gutter
+    const contacts = getContactingObjects(pinObject.body);
+    for (const contact of contacts) {
+        if (contact.type === 'ground' || contact.type === 'gutter') {
+            return true;
         }
     }
-    return fallenPins;
+
+    return false;
+}
+
+// Wrapper for legacy calls
+function getFallenPins() {
+    return dynamicObjects.filter(obj => obj.type === 'pin' && isPinFallen(obj));
 }
 
 function resetBall() {
@@ -1339,54 +1304,82 @@ function resetBall() {
 }
 
 function resetPins() {
-    // The confirmation dialog is dismissed by the input handler that calls this.
-    // No need to dismiss it here.
-    if (pinsFallenResetTimer) {
-        clearTimeout(pinsFallenResetTimer);
-        pinsFallenResetTimer = null;
-    }
-    if (rollCompletionTimer) {
-        clearTimeout(rollCompletionTimer);
-        rollCompletionTimer = null;
-    }
-    allPinsFallen = false;
+    gameManager.resetForNextThrow();
 
-    // Remove existing pins
-    const pinsToRemove = dynamicObjects.filter(obj => obj.isPin);
+    // Remove all existing pins from simulation and scene
+    const pinsToRemove = dynamicObjects.filter(obj => obj.type === 'pin');
     for (const pin of pinsToRemove) {
         scene.remove(pin.mesh);
         world.removeRigidBody(pin.body);
+        colliderToObjectMap.delete(pin.body.collider(0).handle);
     }
 
-    // Filter out the pins from dynamicObjects
-    dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
+    // Filter out all pins from dynamicObjects
+    // Use a reverse loop to avoid issues with splicing
+    for (let i = dynamicObjects.length - 1; i >= 0; i--) {
+        if (dynamicObjects[i].type === 'pin') {
+            dynamicObjects.splice(i, 1);
+        }
+    }
 
-    // Create new pins
     createPins(fY_floor + floorOffset);
-
-    // Reset the ball's position
     resetBall();
 }
 
-function getBallLocationState() {
-    if (holdingController) {
-        return 'in-hand';
-    }
+function updateGameState() {
+    const ball = dynamicObjects.find(o => o.type === 'ball');
+    if (!ball) return;
 
-    const ball = dynamicObjects.find(obj => obj.isBall);
-    if (!ball) {
-        return 'noball';
-    }
+    const ballContacts = getContactingObjects(ball.body);
+    const ballIsOnLane = ballContacts.some(c => c.type === 'lane');
+    const ballIsInGutterOrGround = ballContacts.some(c => c.type === 'gutter' || c.type === 'ground');
+    const ballIsStopped = !isMoving(ball.body);
 
-    const position = ball.body.translation();
-    const adjustedFloorY = fY_floor + floorOffset;
+    switch (gameManager.state) {
+        case GameState.BALL_IN_PLAY:
+            if (ballIsOnLane) {
+                gameManager.ballHasTouchedLane = true;
+                gameManager.setState(GameState.AWAITING_BALL_STOP);
+            }
+            if (ballIsInGutterOrGround && !gameManager.ballHasTouchedLane) {
+                console.log("DEAD BALL: Ball in gutter without touching lane.");
+                gameManager.setState(GameState.SCORING); // Go straight to scoring
+            }
+            break;
 
-    if (position.y < adjustedFloorY + 0.1 && position.y > adjustedFloorY) {
-        return 'gutter';
-    } else if (position.y < adjustedFloorY) {
-        return 'ground';
-    } else {
-        return 'lane';
+        case GameState.AWAITING_BALL_STOP:
+            if (gameManager.ballHasTouchedLane && (ballIsStopped || ballIsInGutterOrGround)) {
+                gameManager.setState(GameState.PINS_SETTLING);
+                console.log("Ball stopped or in gutter. Starting 4s cleanup timer.");
+                gameManager.cleanupTimer = setTimeout(() => {
+                    console.log("4s timer finished. Checking for wobbling pins.");
+                    const pins = dynamicObjects.filter(o => o.type === 'pin');
+                    const standingPins = pins.filter(p => !isPinFallen(p));
+                    const wobblingPins = standingPins.filter(p => isMoving(p.body));
+
+                    if (wobblingPins.length > 0) {
+                        console.log(`${wobblingPins.length} pins still wobbling. Starting 2s settle timer.`);
+                        gameManager.pinSettleTimer = setTimeout(() => {
+                            console.log("2s pin settle timer finished. Moving to scoring.");
+                            gameManager.setState(GameState.SCORING);
+                        }, 2000);
+                    } else {
+                        console.log("Pins are settled. Moving to scoring.");
+                        gameManager.setState(GameState.SCORING);
+                    }
+                }, 4000);
+            }
+            break;
+
+        case GameState.PINS_SETTLING:
+            // Logic is handled by the timers, just wait.
+            break;
+
+        case GameState.SCORING:
+             // This state now triggers the existing scoring and turn-end logic
+            endTurn();
+            gameManager.setState(GameState.TURN_OVER); // Mark turn as processed
+            break;
     }
 }
 
@@ -1608,21 +1601,23 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                const linvel = ball.body.linvel();
-                const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballLocation = getBallLocationState();
+                const ballIsStopped = !isMoving(ball.body);
+                const contacts = getContactingObjects(ball.body);
+                const isBelowLane = contacts.some(c => c.type === 'gutter' || c.type === 'ground');
 
-                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
-
-                if (!isMoving || isBelowLane) {
-                    // In freeplay mode, picking up the ball should clear the fallen pins.
+                if (ballIsStopped || isBelowLane) {
                     if (gameMode === 'freeplay') {
-                        clearFallenPins();
+                        clearFallenPins(true);
+                    } else if (gameMode === 'scoring') {
+                        // In scoring, you can only pick up the ball when it's your turn
+                        if (gameManager.state === GameState.READY_TO_THROW || gameManager.state === GameState.TURN_OVER) {
+                           // Allow pickup
+                        } else {
+                            return; // Don't allow pickup during an active play
+                        }
                     }
 
-                    // Set the collision group immediately to prevent collision on the next physics step.
                     ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
-                    // Register the intent to hold, which will be processed in the animate loop after the next physics step.
                     controllerWantsToHold = controller;
                 }
             }
@@ -1634,18 +1629,19 @@ async function init() {
         if (holdingController === controller) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                ball.collider.setCollisionGroups(BALL_COLLISION_GROUP); // Re-enable collision with pins
+                ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
                 ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
 
-                // Apply the controller's velocity to the ball
                 const throwVelocityMultiplier = 1.1;
                 const linearVelocity = controller.userData.linearVelocity.clone().multiplyScalar(throwVelocityMultiplier);
-                const angularVelocity = controller.userData.angularVelocity.clone();//.multiplyScalar(throwVelocityMultiplier);
+                const angularVelocity = controller.userData.angularVelocity.clone();
 
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
-                isBallThrown = true;
-                ballHasTouchedLane = false; // Reset lane contact flag on throw
+
+                if (gameMode === 'scoring') {
+                    gameManager.setState(GameState.BALL_IN_PLAY);
+                }
             }
             holdingController = null;
         }
