@@ -65,12 +65,15 @@ let pinHUD = null;
 let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
+let gutterCollider = null;
+let floorCollider = null;
 let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
 let laneCollisionVisualizer = null;
 const loader = new GLTFLoader();
 let sceneSetupInitiated = false;
+let colliderToObjectMap = new Map();
 
 function createOptionsMenu() {
     const menu = new THREE.Group();
@@ -551,10 +554,8 @@ function drawPinHUD() {
         let isStanding = false;
         const pin = pins.find(p => p.pinId === index); // Find pin by its unique ID
         if (pin) {
-            const up = new THREE.Vector3(0, 1, 0);
-            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-            const pinUp = up.clone().applyQuaternion(quaternion);
-            isStanding = pinUp.y >= 0.5;
+            const state = getPinState(pin);
+            isStanding = (state === 'standing' || state === 'wobbling');
         }
 
         ctx.beginPath();
@@ -769,51 +770,45 @@ function animate(timestamp, frame) {
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball && !rollCompletionTimer) {
+                const ballIsSleeping = ball.body.isSleeping();
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // Condition 1: Ball is out of play (gutter/ground). This is the highest priority check.
-                if (isOutOfPlay) {
-                    if (ballHasTouchedLane) {
-                        isBallThrown = false; // Mark the throw as processed to prevent re-triggering.
+                // Conditions to start the cleanup timer: ball must have been in play, and now it's either stopped or out of bounds.
+                const timerShouldStart = ballHasTouchedLane && (isOutOfPlay || ballIsSleeping);
 
-                        // Start a 4-second timer.
-                        rollCompletionTimer = setTimeout(() => {
-                            // After 4 seconds, check if pins are still moving substantially.
-                            if (arePinsMoving()) {
-                                // If they are, grant a final 2-second extension.
-                                rollCompletionTimer = setTimeout(() => {
-                                    stabilizeWobblingPins();
-                                    endTurn();
-                                    rollCompletionTimer = null;
-                                }, 2000);
-                            } else {
-                                // If pins have settled, end the turn.
-                                stabilizeWobblingPins();
+                if (timerShouldStart) {
+                    isBallThrown = false; // The turn is now being processed, prevent this block from re-running.
+
+                    // Start the 4-second cleanup timer.
+                    rollCompletionTimer = setTimeout(() => {
+                        // Check if any pins are still wobbling.
+                        let anyPinWobbling = false;
+                        const pins = dynamicObjects.filter(obj => obj.isPin);
+                        for (const pin of pins) {
+                            if (getPinState(pin) === 'wobbling') {
+                                anyPinWobbling = true;
+                                break;
+                            }
+                        }
+
+                        if (anyPinWobbling) {
+                            // If pins are wobbling, grant a final 2-second extension.
+                            rollCompletionTimer = setTimeout(() => {
+                                stabilizeStandingPins();
                                 endTurn();
                                 rollCompletionTimer = null;
-                            }
-                        }, 4000);
-                    } else {
-                        // Ball went straight to the gutter without touching the lane. Not a valid turn.
-                        isBallThrown = false;
-                    }
-                }
-                // Condition 2: Ball is still on the lane. Check if everything has stopped.
-                else {
-                    const ballIsSleeping = ball.body.isSleeping();
-                    const pinsAreStationary = !arePinsMoving();
-
-                    if (ballIsSleeping && pinsAreStationary) {
-                        if (ballHasTouchedLane) {
-                            isBallThrown = false;
-                            endTurn();
+                            }, 2000);
                         } else {
-                            // A ball that was "thrown" but stopped on the lane without
-                            // ever making contact is not a valid turn.
-                            isBallThrown = false;
+                            // If no pins are wobbling, end the turn after stabilization.
+                            stabilizeStandingPins();
+                            endTurn();
+                            rollCompletionTimer = null;
                         }
-                    }
+                    }, 4000);
+                } else if (!ballHasTouchedLane && isOutOfPlay) {
+                    // This handles a ball that was thrown directly into the gutter/ground. Not a valid turn.
+                    isBallThrown = false;
                 }
             }
         }
@@ -1158,7 +1153,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
                     .setRestitution(0.0)
                     .setCollisionGroups(LANE_COLLISION_GROUP);
-                world.createCollider(trimeshDesc, laneBody);
+                gutterCollider = world.createCollider(trimeshDesc, laneBody);
 
                 if (showCollision) {
                     const visualizerGeo = new THREE.BufferGeometry();
@@ -1193,7 +1188,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
-    world.createCollider(floorColliderDesc, floorBody);
+    floorCollider = world.createCollider(floorColliderDesc, floorBody);
 
     // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
@@ -1223,7 +1218,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
+    const ballObject = { mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true };
+    colliderToObjectMap.set(ballCollider.handle, ballObject);
+    dynamicObjects.push(ballObject);
     scene.add(ballMesh);
     ballMesh.visible = true;
 
@@ -1276,7 +1273,9 @@ function createPins(fY) {
         //const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setRestitution(.5).setMass(20).setFriction(1).setCollisionGroups(PINS_COLLISION_GROUP);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
+        const pinObject = { mesh: pinMesh, body: pinBody, collider: collider, initialPosition: initialPosition, isPin: true, pinId: id };
+        colliderToObjectMap.set(collider.handle, pinObject);
+        dynamicObjects.push(pinObject);
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -1311,75 +1310,65 @@ function clearFallenPins() {
     }
 }
 
+function getPinState(pin) {
+    const pinContacts = currentContacts.get(pin.collider.handle);
+
+    // 1. Contact Check: Is the pin touching the gutter or the ground?
+    if (pinContacts) {
+        if (gutterCollider && pinContacts.has(gutterCollider.handle)) {
+            return 'fallen';
+        }
+        if (floorCollider && pinContacts.has(floorCollider.handle)) {
+            return 'fallen';
+        }
+    }
+
+    // 2. Angle Check: Is the pin tilted more than 5 degrees?
+    const up = new THREE.Vector3(0, 1, 0);
+    const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
+    const pinUp = up.clone().applyQuaternion(quaternion);
+    // cos(5 degrees) is approx 0.9962. If the dot product (pinUp.y) is less than this, the angle is > 5 deg.
+    if (pinUp.y < 0.9962) {
+        return 'fallen';
+    }
+
+    // 3. Velocity Check: Is the pin moving substantially?
+    const linearVelocityThreshold = 0.01;
+    const angularVelocityThreshold = 0.01;
+    if (!pin.body.isSleeping()) {
+        const linvel = pin.body.linvel();
+        const angvel = pin.body.angvel();
+        if (linvel.x**2 + linvel.y**2 + linvel.z**2 > linearVelocityThreshold ||
+            angvel.x**2 + angvel.y**2 + angvel.z**2 > angularVelocityThreshold) {
+            return 'wobbling';
+        }
+    }
+
+    // 4. Default: If none of the above, the pin is standing.
+    return 'standing';
+}
+
 function getFallenPins() {
     const fallenPins = [];
     const pins = dynamicObjects.filter(obj => obj.isPin);
-    const laneSurfaceY = fY_floor + floorOffset;
-
     for (const pin of pins) {
-        // A pin is considered fallen if it has tipped over OR if its center
-        // has dropped below the lane's surface (i.e., it's in the gutter or off the lane).
-
-        // Check orientation
-        const up = new THREE.Vector3(0, 1, 0);
-        const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-        const pinUp = up.clone().applyQuaternion(quaternion);
-        const isTippedOver = pinUp.y < 0.5;
-
-        // Check if pin center is below the lane surface
-        const position = pin.body.translation();
-        const isBelowLane = position.y < laneSurfaceY;
-
-        if (isTippedOver || isBelowLane) {
+        if (getPinState(pin) === 'fallen') {
             fallenPins.push(pin);
         }
     }
     return fallenPins;
 }
 
-function arePinsMoving() {
+function stabilizeStandingPins() {
     const pins = dynamicObjects.filter(obj => obj.isPin);
-    const linearVelocityThreshold = 0.01; // A small value to detect noticeable movement
-    const angularVelocityThreshold = 0.01;
-
     for (const pin of pins) {
-        if (pin.body.isSleeping()) {
-            continue; // Skip sleeping pins immediately
+        if (getPinState(pin) !== 'fallen') {
+            // If the pin is not fallen, stabilize it.
+            const body = pin.body;
+            body.setRotation({ w: 1.0, x: 0.0, y: 0.0, z: 0.0 }, true);
+            body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+            body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         }
-
-        const linvel = pin.body.linvel();
-        const angvel = pin.body.angvel();
-
-        // Check if linear or angular velocity is above the threshold
-        if (linvel.x**2 + linvel.y**2 + linvel.z**2 > linearVelocityThreshold) {
-            return true;
-        }
-        if (angvel.x**2 + angvel.y**2 + angvel.z**2 > angularVelocityThreshold) {
-            return true;
-        }
-    }
-    return false; // All pins are stationary or have negligible movement
-}
-
-function stabilizeWobblingPins() {
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-    const fallenPins = getFallenPins(); // Get the list of pins that are already down.
-
-    for (const pin of pins) {
-        // If the pin is already considered fallen, we don't need to do anything.
-        if (fallenPins.includes(pin)) {
-            continue;
-        }
-
-        // For any pin that is still standing but might be wobbling, we stabilize it.
-        const body = pin.body;
-
-        // Reset rotation to be perfectly upright. The pin's model is oriented along the Y axis.
-        body.setRotation({ w: 1.0, x: 0.0, y: 0.0, z: 0.0 }, true);
-
-        // Set its velocity to zero to stop all movement.
-        body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-        body.setAngvel({ x: 0, y: 0, z: 0 }, true);
     }
 }
 
@@ -1450,16 +1439,17 @@ function getBallLocationState() {
         return 'noball';
     }
 
-    const position = ball.body.translation();
-    const adjustedFloorY = fY_floor + floorOffset;
-
-    if (position.y < adjustedFloorY + 0.1 && position.y > adjustedFloorY) {
-        return 'gutter';
-    } else if (position.y < adjustedFloorY) {
-        return 'ground';
-    } else {
-        return 'lane';
+    const ballContacts = currentContacts.get(ball.collider.handle);
+    if (ballContacts) {
+        if (gutterCollider && ballContacts.has(gutterCollider.handle)) {
+            return 'gutter';
+        }
+        if (floorCollider && ballContacts.has(floorCollider.handle)) {
+            return 'ground';
+        }
     }
+
+    return 'lane';
 }
 
 
