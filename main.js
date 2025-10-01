@@ -768,48 +768,51 @@ function animate(timestamp, frame) {
         // --- SCORING LOGIC: Roll Completion Detection ---
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
             const ball = dynamicObjects.find(obj => obj.isBall);
-            if (ball && !rollCompletionTimer) { // Only check if a timer isn't already running
-                const ballIsSleeping = ball.body.isSleeping();
+            if (ball && !rollCompletionTimer) {
                 const ballLocation = getBallLocationState();
-                const pinsAreMoving = arePinsMoving();
-
-                // Condition 1: Everything has stopped moving.
-                if (ballIsSleeping && !pinsAreMoving) {
-                    if (ballHasTouchedLane) {
-                        isBallThrown = false;
-                        endTurn();
-                    } else {
-                        // Ball was thrown but didn't hit the lane and has stopped.
-                        // This is a dropped ball, not a valid turn.
-                        isBallThrown = false;
-                    }
-                    return; // End of check for this frame
-                }
-
-                // Condition 2: Ball is out of play, but pins might still be moving.
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+
+                // Condition 1: Ball is out of play (gutter/ground). This is the highest priority check.
                 if (isOutOfPlay) {
                     if (ballHasTouchedLane) {
-                        isBallThrown = false; // The turn is committed, prevent re-triggering.
-                        // Start a 4-second timer to wait for pins to settle.
+                        isBallThrown = false; // Mark the throw as processed to prevent re-triggering.
+
+                        // Start a 4-second timer.
                         rollCompletionTimer = setTimeout(() => {
-                            // After 4 seconds, check if pins are still moving.
+                            // After 4 seconds, check if pins are still moving substantially.
                             if (arePinsMoving()) {
-                                // If yes, start a final 2-second timer.
+                                // If they are, grant a final 2-second extension.
                                 rollCompletionTimer = setTimeout(() => {
+                                    stabilizeWobblingPins();
                                     endTurn();
                                     rollCompletionTimer = null;
                                 }, 2000);
                             } else {
-                                // If no, end the turn immediately.
+                                // If pins have settled, end the turn.
+                                stabilizeWobblingPins();
                                 endTurn();
                                 rollCompletionTimer = null;
                             }
                         }, 4000);
                     } else {
-                        // Ball went straight to gutter/ground without touching lane.
-                        // Not a valid turn.
+                        // Ball went straight to the gutter without touching the lane. Not a valid turn.
                         isBallThrown = false;
+                    }
+                }
+                // Condition 2: Ball is still on the lane. Check if everything has stopped.
+                else {
+                    const ballIsSleeping = ball.body.isSleeping();
+                    const pinsAreStationary = !arePinsMoving();
+
+                    if (ballIsSleeping && pinsAreStationary) {
+                        if (ballHasTouchedLane) {
+                            isBallThrown = false;
+                            endTurn();
+                        } else {
+                            // A ball that was "thrown" but stopped on the lane without
+                            // ever making contact is not a valid turn.
+                            isBallThrown = false;
+                        }
                     }
                 }
             }
@@ -1336,12 +1339,48 @@ function getFallenPins() {
 
 function arePinsMoving() {
     const pins = dynamicObjects.filter(obj => obj.isPin);
+    const linearVelocityThreshold = 0.01; // A small value to detect noticeable movement
+    const angularVelocityThreshold = 0.01;
+
     for (const pin of pins) {
-        if (!pin.body.isSleeping()) {
-            return true; // Found a moving pin
+        if (pin.body.isSleeping()) {
+            continue; // Skip sleeping pins immediately
+        }
+
+        const linvel = pin.body.linvel();
+        const angvel = pin.body.angvel();
+
+        // Check if linear or angular velocity is above the threshold
+        if (linvel.x**2 + linvel.y**2 + linvel.z**2 > linearVelocityThreshold) {
+            return true;
+        }
+        if (angvel.x**2 + angvel.y**2 + angvel.z**2 > angularVelocityThreshold) {
+            return true;
         }
     }
-    return false; // All pins are stationary
+    return false; // All pins are stationary or have negligible movement
+}
+
+function stabilizeWobblingPins() {
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    const fallenPins = getFallenPins(); // Get the list of pins that are already down.
+
+    for (const pin of pins) {
+        // If the pin is already considered fallen, we don't need to do anything.
+        if (fallenPins.includes(pin)) {
+            continue;
+        }
+
+        // For any pin that is still standing but might be wobbling, we stabilize it.
+        const body = pin.body;
+
+        // Reset rotation to be perfectly upright. The pin's model is oriented along the Y axis.
+        body.setRotation({ w: 1.0, x: 0.0, y: 0.0, z: 0.0 }, true);
+
+        // Set its velocity to zero to stop all movement.
+        body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+        body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    }
 }
 
 function resetBall() {
