@@ -1297,8 +1297,8 @@ function getFallenPins() {
     // It's more efficient to compute the lane's world AABB once.
     let laneWorldAABB = null;
     if (laneObject && laneObject.collider) {
-        // The method to get the world-space AABB is .aabb() in this version.
-        const laneAabb = laneObject.collider.aabb();
+        // The method to get the world-space AABB is .aabb in this version.
+        const laneAabb = laneObject.collider.aabb;
 
         laneWorldAABB = new THREE.Box3(
             new THREE.Vector3(laneAabb.min.x, laneAabb.min.y, laneAabb.min.z),
