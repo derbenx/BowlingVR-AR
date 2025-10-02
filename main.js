@@ -60,6 +60,7 @@ let currentRoll = 0;
 let isGameOver = false;
 let isBallThrown = false;
 let ballHasTouchedLane = false;
+let systemIsHoldingBall = false;
 let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
@@ -144,7 +145,7 @@ function updateGameModeUI() {
             // Position the scoreboard above the lane
             if (laneObject) {
                 const lanePosition = laneObject.mesh.position;
-                scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                scoreboard.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
             }
             scoreboard.visible = true;
             startNewGame();
@@ -519,7 +520,7 @@ function createPinHUD() {
     hudMesh.userData.canvas = canvas;
     hudMesh.userData.context = context;
 
-    hudMesh.visible = false; // Initially hidden
+    hudMesh.visible = true; // Default to on
     scene.add(hudMesh);
 
     return hudMesh;
@@ -652,9 +653,9 @@ async function main() {
             .then((session) => {renderer.xr.setSession(session);});
           }
         });
-      }
     }
     init();
+}
 
 function animate(timestamp, frame) {
     if (renderer.xr.isPresenting && !sceneSetupInitiated && frame) {
@@ -728,6 +729,21 @@ function animate(timestamp, frame) {
             ball.body.setNextKinematicTranslation(controllerGrip.position);
             ball.body.setNextKinematicRotation(controllerGrip.quaternion);
         }
+    } else if (systemIsHoldingBall) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            const cameraPosition = new THREE.Vector3();
+            const cameraQuaternion = new THREE.Quaternion();
+            camera.getWorldPosition(cameraPosition);
+            camera.getWorldQuaternion(cameraQuaternion);
+
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
+            const targetPosition = cameraPosition.clone().add(forward.multiplyScalar(0.5));
+            targetPosition.y = fY_floor + floorOffset + 0.3; // Hold it at a consistent height from the floor
+
+            ball.body.setNextKinematicTranslation(targetPosition);
+            ball.body.setNextKinematicRotation(cameraQuaternion);
+        }
     }
 
     dynamicObjects.forEach(obj => {
@@ -781,20 +797,21 @@ function animate(timestamp, frame) {
                 const ballLocation = getBallLocationState();
                 const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                // If the ball has stopped or is out of play, and a timer isn't already running...
+                // If the ball has stopped moving or is out of play, check if the turn should end.
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
+                    const isGutter = ballLocation === 'gutter';
+                    const isGround = ballLocation === 'ground';
 
-                    // A direct gutter ball is a valid play.
-                    // Any other valid play requires the ball to have touched the lane first.
-                    if (ballLocation === 'gutter' || ballHasTouchedLane) {
+                    // A turn ends if it's a direct gutter ball, OR if a valid throw (that touched the lane) has finished by stopping or hitting the ground.
+                    if (isGutter || (ballHasTouchedLane && (isSleeping || isGround))) {
                         isBallThrown = false; // Prevent this from running again until next throw
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
                         }, 5000); // 5-second timer
-                    } else {
-                        // This case handles a ball dropped on the ground without touching the lane.
-                        // It's not a valid play, so just reset the throw state.
+                    } else if (isGround || isSleeping) {
+                        // If we are here, it means the ball is on the ground or sleeping, but has NOT touched the lane.
+                        // This is an invalid drop, so just reset the throw state for a re-throw.
                         isBallThrown = false;
                     }
                 }
@@ -1054,7 +1071,7 @@ function animate(timestamp, frame) {
                         pinHUD.visible = !pinHUD.visible;
                         if (pinHUD.visible && laneObject) {
                             const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
                             if (scoreboard) {
                                 pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
@@ -1400,19 +1417,15 @@ function getFallenPins() {
 function resetBall() {
     const ball = dynamicObjects.find(obj => obj.isBall);
     if (ball) {
-        // If the ball was being held, release it
+        // Release from controller if held
         if (holdingController) {
             holdingController = null;
         }
 
-        // Ensure the ball is a dynamic body and has the correct collision group
-        ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
-        ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
-
-        // Reset position to its initial spot, accounting for any floor offset changes
-        const initialPos = ball.initialPosition;
-        const resetY = fY_floor + floorOffset + (initialPos.y - fY_floor);
-        ball.body.setTranslation({ x: initialPos.x, y: resetY, z: initialPos.z }, true);
+        // Set the ball to be kinematically controlled by the system
+        ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
+        ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+        systemIsHoldingBall = true;
 
         // Reset velocities
         ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -1591,6 +1604,13 @@ function updateFloorAndLanePosition(yDelta = 0) {
         floorBody.setTranslation({ x: floorPosition.x, y: (fY_floor - 0.25) + floorOffset, z: floorPosition.z }, true);
     }
 
+    if (scoreboard) {
+        scoreboard.position.y += yDelta;
+    }
+    if (pinHUD) {
+        pinHUD.position.y += yDelta;
+    }
+
     // If pins are kinematic (i.e., being moved with the floor), update their position too.
     const pins = dynamicObjects.filter(obj => obj.isPin);
     pins.forEach(pin => {
@@ -1692,25 +1712,34 @@ async function init() {
 
     function onSelectStart(event) {
         const controller = event.target;
-        if (holdingController === null) {
+        if (holdingController === null) { // Can't grab if someone is already holding.
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                const linvel = ball.body.linvel();
-                const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballLocation = getBallLocationState();
+                // If the system is holding the ball, only allow a grab if the controller is close.
+                if (systemIsHoldingBall) {
+                    const ballPosition = new THREE.Vector3().copy(ball.body.translation());
+                    const controllerPosition = controller.position;
+                    const distance = ballPosition.distanceTo(controllerPosition);
 
-                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
-
-                if (!isMoving || isBelowLane) {
-                    // In freeplay mode, picking up the ball should clear the fallen pins.
-                    if (gameMode === 'freeplay') {
-                        clearFallenPins();
+                    if (distance < 0.2) { // 20cm grab distance
+                        systemIsHoldingBall = false; // Player is taking control.
+                        controllerWantsToHold = controller;
                     }
+                    // If not close enough, do nothing. The ball continues to hover.
+                } else {
+                    // Standard grab logic for a loose ball.
+                    const linvel = ball.body.linvel();
+                    const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
+                    const ballLocation = getBallLocationState();
+                    const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
-                    // Set the collision group immediately to prevent collision on the next physics step.
-                    ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
-                    // Register the intent to hold, which will be processed in the animate loop after the next physics step.
-                    controllerWantsToHold = controller;
+                    if (!isMoving || isBelowLane) {
+                        if (gameMode === 'freeplay') {
+                            clearFallenPins();
+                        }
+                        ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+                        controllerWantsToHold = controller;
+                    }
                 }
             }
         }
