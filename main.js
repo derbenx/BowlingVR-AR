@@ -624,13 +624,12 @@ async function main() {
 
     world = new RAPIER.World(gravity);
     eventQueue = new RAPIER.EventQueue(true);
-    world.integrationParameters.dt = 1/120; //90fps ?
+    world.integrationParameters.dt = 1/120;
 
-    // Check for test mode
     const urlParams = new URLSearchParams(window.location.search);
-    const testMode = urlParams.has('test');
+    const isTestMode = urlParams.has('test');
 
-    if (testMode) {
+    if (isTestMode) {
         // In test mode, bypass AR and set up the scene directly
         sceneSetupInitiated = true;
         fY_floor = 0; // Assume flat ground for testing
@@ -638,48 +637,42 @@ async function main() {
             await placeScene(fY_floor, loader, world, dynamicObjects);
             updateGameModeUI();
             // Expose functions for Playwright testing
-            window.updateGameModeUI = updateGameModeUI;
-            window.resetBall = resetBall;
-            window.getBallContacts = getBallContacts;
-            window.getFallenPins = getFallenPins;
-            window.dynamicObjects = dynamicObjects;
-            window.world = world;
             window.createConfirmationDialog = createConfirmationDialog;
             window.renderer = renderer;
-            window.scene = scene; // Expose scene to add the dialog
-            // Signal to Playwright that the test environment is ready
-            window.testModeReady = true;
+            window.scene = scene;
+            window.testModeReady = true; // Signal that the test environment is ready
         })();
     } else {
+        // Standard AR mode initialization
         const arButton = ARButton.createButton(renderer, {
             requiredFeatures: ['local-floor', 'plane-detection']
         });
         document.body.appendChild(arButton);
 
         renderer.xr.addEventListener('sessionstart', () => {
-            // Scene setup is now handled in the animate loop
+            // Scene setup is handled in the animate loop for AR
         });
-
         renderer.xr.addEventListener('sessionend', cleanupScene);
 
-        // Setup plane detection
         planes = new XRPlanes(renderer);
-        //scene.add(planes);
-        //planes.visible = false;
+        // scene.add(planes); // Only add if needed for debugging
+        // planes.visible = false;
 
         if (navigator.xr && navigator.xr.isSessionSupported) {
             navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-              if (supported && navigator.xr.requestSession) {
-                navigator.xr.requestSession('immersive-vr', {
-                  optionalFeatures: ['local-floor','plane-detection'],
-                })
-                .then((session) => {renderer.xr.setSession(session);});
-              }
+                if (supported && navigator.xr.requestSession) {
+                    navigator.xr.requestSession('immersive-vr', {
+                        optionalFeatures: ['local-floor', 'plane-detection'],
+                    }).then((session) => {
+                        renderer.xr.setSession(session);
+                    });
+                }
             });
-          }
         }
     }
+
     init();
+}
 
 function animate(timestamp, frame) {
     if (renderer.xr.isPresenting && !sceneSetupInitiated && frame) {
@@ -803,19 +796,19 @@ function animate(timestamp, frame) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
                 const isSleeping = ball.body.isSleeping();
-                const ballContacts = getBallContacts();
-                const isOutOfPlay = ballContacts.includes('gutter') || ballContacts.includes('ground');
+                const ballLocation = getBallLocationState();
+                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
 
                        // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
-    if (ballContacts.includes('ground') && !ballHasTouchedLane) {
+    if (ballLocation === 'ground' && !ballHasTouchedLane) {
         isBallThrown = false; // Reset the throw state.
         // And we do nothing else, as requested. The turn does not proceed.
     }
     // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
-    else if (ballContacts.includes('gutter') || ballHasTouchedLane) {
+    else if (ballLocation === 'gutter' || ballHasTouchedLane) {
                         isBallThrown = false; // Prevent this from running again until next throw
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
@@ -966,8 +959,8 @@ function animate(timestamp, frame) {
                 // --- DEFAULT GAME INPUT HANDLING ---
                 else {
                     // Handle floor height adjustment with grip and thumbstick
-                    const ballContacts = getBallContacts();
-                    const canAdjust = !ballContacts.includes('lane');
+                    const ballLocation = getBallLocationState();
+                    const canAdjust = ballLocation !== 'lane';
 
                     if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
                         if (!gripButtonState[i]) {
@@ -1063,9 +1056,17 @@ function animate(timestamp, frame) {
                                 selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
                                 optionsMenu.userData.update();
 
-                                // Position the options menu at a fixed location
-                                optionsMenu.position.set(0, 1.5, -3);
-                                optionsMenu.rotation.y = Math.PI; // Face the user
+                                // Position the options menu above the lane, similar to the scoreboard
+                                if (laneObject) {
+                                    const lanePosition = laneObject.mesh.position;
+                                    optionsMenu.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                                    if (scoreboard) {
+                                        optionsMenu.quaternion.copy(scoreboard.quaternion);
+                                    }
+                                } else {
+                                    // Fallback position if the lane doesn't exist yet
+                                    optionsMenu.position.set(0, 1.5, -3);
+                                }
                             }
                         }
                     } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
@@ -1281,11 +1282,6 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 }
 
 function getBallContacts() {
-    // If the ball is being held, that's its primary state.
-    if (holdingController) {
-        return ['in-hand'];
-    }
-
     const ball = dynamicObjects.find(obj => obj.isBall);
     if (!ball || !ball.collider) {
         return [];
@@ -1485,6 +1481,29 @@ function resetPins() {
     resetBall();
 }
 
+function getBallLocationState() {
+    if (holdingController) {
+        return 'in-hand';
+    }
+
+    const ball = dynamicObjects.find(obj => obj.isBall);
+    if (!ball) {
+        return 'noball';
+    }
+
+    const position = ball.body.translation();
+    const adjustedFloorY = fY_floor + floorOffset;
+
+    if (position.y < adjustedFloorY + 0.1 && position.y > adjustedFloorY) {
+        return 'gutter';
+    } else if (position.y < adjustedFloorY) {
+        return 'ground';
+    } else {
+        return 'lane';
+    }
+}
+
+
 function createConfirmationDialog(title, buttons, renderer) {
     const dialog = new THREE.Group();
     dialog.name = "confirmationDialog";
@@ -1575,9 +1594,17 @@ function createConfirmationDialog(title, buttons, renderer) {
         activeConfirmationDialog = null;
     };
 
-    // Position the dialog at a fixed location in the world
-    dialog.position.set(0, 1.5, -3);
-    dialog.rotation.y = Math.PI; // Face the user at z=0
+    // Position the dialog above the lane, similar to the scoreboard
+    if (laneObject) {
+        const lanePosition = laneObject.mesh.position;
+        dialog.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+        if (scoreboard) {
+            dialog.quaternion.copy(scoreboard.quaternion);
+        }
+    } else {
+        // Fallback position if the lane doesn't exist yet
+        dialog.position.set(0, 1.5, -3);
+    }
 
     return dialog;
 }
@@ -1707,9 +1734,9 @@ async function init() {
             if (ball) {
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballContacts = getBallContacts();
+                const ballLocation = getBallLocationState();
 
-                const isBelowLane = ballContacts.includes('gutter') || ballContacts.includes('ground');
+                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
                 if (!isMoving || isBelowLane) {
                     // In freeplay mode, picking up the ball should clear the fallen pins.
