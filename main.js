@@ -519,7 +519,7 @@ function createPinHUD() {
     hudMesh.userData.canvas = canvas;
     hudMesh.userData.context = context;
 
-    hudMesh.visible = false; // Initially hidden
+    hudMesh.visible = true;
     scene.add(hudMesh);
 
     return hudMesh;
@@ -640,6 +640,7 @@ async function main() {
             window.createConfirmationDialog = createConfirmationDialog;
             window.renderer = renderer;
             window.scene = scene;
+            window.getBallContacts = getBallContacts;
             window.testModeReady = true; // Signal that the test environment is ready
         })();
     } else {
@@ -796,29 +797,30 @@ function animate(timestamp, frame) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
                 const isSleeping = ball.body.isSleeping();
-                const ballLocation = getBallLocationState();
-                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+                //const ballLocation = getBallLocationState(); //old method
+                //const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+                const ballContacts = getBallContacts();
+                const isOutOfPlay = ballContacts.includes('gutter') || ballContacts.includes('ground');
 
                 // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
 
                        // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
-    if (ballLocation === 'ground' && !ballHasTouchedLane) {
+    if (ballContacts.includes('ground') && !ballHasTouchedLane) {
         isBallThrown = false; // Reset the throw state.
         // And we do nothing else, as requested. The turn does not proceed.
     }
     // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
-    else if (ballLocation === 'gutter' || ballHasTouchedLane) {
-                        isBallThrown = false; // Prevent this from running again until next throw
+    else if (ballContacts.includes('gutter') || ballHasTouchedLane) {
+                        // isBallThrown is intentionally kept true here.
+                        // It will be reset inside endTurn() -> resetBall() after the timer.
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
                         }, 5000); // 5-second timer
                     } else {
-                     console.log('dropped');
-                        // This case handles a ball dropped on the ground without touching the lane.
-                        // It's not a valid play, so just reset the throw state.
-                        isBallThrown = false;
+                     console.log("doesn't happen?");
+                     isBallThrown = false;
                     }
                 }
             }
@@ -959,8 +961,11 @@ function animate(timestamp, frame) {
                 // --- DEFAULT GAME INPUT HANDLING ---
                 else {
                     // Handle floor height adjustment with grip and thumbstick
-                    const ballLocation = getBallLocationState();
-                    const canAdjust = ballLocation !== 'lane';
+                    //const ballLocation = getBallLocationState();
+                    //const canAdjust = ballLocation !== 'lane';
+                    const ballContacts = getBallContacts();
+                    const canAdjust = !ballContacts.includes('lane');
+
 
                     if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
                         if (!gripButtonState[i]) {
@@ -1282,6 +1287,10 @@ async function placeScene(fY, loader, world, dynamicObjects) {
 }
 
 function getBallContacts() {
+    // If the ball is being held, that's its primary state.
+    if (holdingController) {
+        return ['in-hand'];
+    }
     const ball = dynamicObjects.find(obj => obj.isBall);
     if (!ball || !ball.collider) {
         return [];
@@ -1480,7 +1489,7 @@ function resetPins() {
     // Reset the ball's position
     resetBall();
 }
-
+ /*
 function getBallLocationState() {
     if (holdingController) {
         return 'in-hand';
@@ -1503,7 +1512,7 @@ function getBallLocationState() {
     }
 }
 
-
+*/
 function createConfirmationDialog(title, buttons, renderer) {
     const dialog = new THREE.Group();
     dialog.name = "confirmationDialog";
@@ -1732,11 +1741,17 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
+                //const ballLocation = getBallLocationState();
+                //if (gameMode === 'scoring' && isBallThrown && ballLocation === 'lane') {
+                 const ballContacts = getBallContacts();
+                 if (gameMode === 'scoring' && isBallThrown && ballContacts.includes('lane')) {
+                    return; //can't grab ball in play
+                }
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballLocation = getBallLocationState();
 
-                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
+                //const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
+                const isBelowLane = ballContacts.includes('gutter') || ballContacts.includes('ground');
 
                 if (!isMoving || isBelowLane) {
                     // In freeplay mode, picking up the ball should clear the fallen pins.
