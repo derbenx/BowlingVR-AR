@@ -52,7 +52,10 @@ if (!swEnabled) {
         'js/three/examples/jsm/webxr/ARButton.js',
         'js/three/examples/jsm/geometries/ConvexGeometry.js',
         'js/three/examples/jsm/webxr/XRPlanes.js',
-        'js/three/examples/jsm/webxr/XRControllerModelFactory.js'
+        'js/three/examples/jsm/webxr/XRControllerModelFactory.js',
+        'js/rapier/rapier.mjs',
+        'js/rapier/rapier_wasm3d.js',
+        'js/rapier/rapier_wasm3d_bg.wasm'
     ];
 
     self.addEventListener('install', event => {
