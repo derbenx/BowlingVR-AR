@@ -519,7 +519,7 @@ function createPinHUD() {
     hudMesh.userData.canvas = canvas;
     hudMesh.userData.context = context;
 
-    hudMesh.visible = false; // Initially hidden
+    hudMesh.visible = true;
     scene.add(hudMesh);
 
     return hudMesh;
@@ -809,7 +809,8 @@ function animate(timestamp, frame) {
     }
     // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
     else if (ballLocation === 'gutter' || ballHasTouchedLane) {
-                        isBallThrown = false; // Prevent this from running again until next throw
+                        // isBallThrown is intentionally kept true here.
+                        // It will be reset inside endTurn() -> resetBall() after the timer.
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
@@ -1732,6 +1733,9 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
+                if (gameMode === 'scoring' && isBallThrown) {
+                    return;
+                }
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
                 const ballLocation = getBallLocationState();
