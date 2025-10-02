@@ -1733,12 +1733,12 @@ async function init() {
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
-                if (gameMode === 'scoring' && isBallThrown) {
+                const ballLocation = getBallLocationState();
+                if (gameMode === 'scoring' && isBallThrown && ballLocation === 'lane') {
                     return;
                 }
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballLocation = getBallLocationState();
 
                 const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
 
