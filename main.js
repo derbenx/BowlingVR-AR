@@ -1405,8 +1405,8 @@ function resetBall() {
             holdingController = null;
         }
 
-        // Ensure the ball is a dynamic body and has the correct collision group
-        ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
+        // After a reset, the ball should float in place until grabbed.
+        ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
         ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
 
         // Reset position to its initial spot, accounting for any floor offset changes
@@ -1585,6 +1585,14 @@ function updateFloorAndLanePosition(yDelta = 0) {
         const newPos = laneObject.mesh.position.clone();
         newPos.y = fY_floor + floorOffset;
         setLanePosition(newPos);
+
+        // Also update scoreboard and pin HUD positions if they are visible
+        if (scoreboard && scoreboard.visible) {
+            scoreboard.position.set(newPos.x, newPos.y + 1.5, newPos.z - 2);
+        }
+        if (pinHUD && pinHUD.visible) {
+            pinHUD.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
+        }
     }
     if (floorBody) {
         const floorPosition = floorBody.translation();
