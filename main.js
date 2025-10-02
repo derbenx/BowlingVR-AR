@@ -18,7 +18,7 @@ const GROUP_FLOOR = 1 << 3;
 // Defines what a group is and what it collides with.
 // The 16 left-most bits are memberships, the 16 right-most bits are the filter.
 const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL | GROUP_PINS);
-// Ball collides with Lane, Pins, and Floor
+// Ball collides with heightLane, Pins, and Floor
 const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GROUP_FLOOR);
 // Held ball collides with Floor
 const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_FLOOR);
@@ -144,7 +144,7 @@ function updateGameModeUI() {
             // Position the scoreboard above the lane
             if (laneObject) {
                 const lanePosition = laneObject.mesh.position;
-                scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                scoreboard.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
             }
             scoreboard.visible = true;
             startNewGame();
@@ -768,7 +768,7 @@ function animate(timestamp, frame) {
                     pinsFallenResetTimer = setTimeout(() => {
                         resetPins();
                         pinsFallenResetTimer = null;
-                    }, 4000);
+                    }, 5000);
                 }
             }
         }
@@ -784,15 +784,20 @@ function animate(timestamp, frame) {
                 // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
 
-                    // A direct gutter ball is a valid play.
-                    // Any other valid play requires the ball to have touched the lane first.
-                    if (ballLocation === 'gutter' || ballHasTouchedLane) {
+                       // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
+    if (ballLocation === 'ground' && !ballHasTouchedLane) {
+        isBallThrown = false; // Reset the throw state.
+        // And we do nothing else, as requested. The turn does not proceed.
+    } 
+    // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
+    else if (ballLocation === 'gutter' || ballHasTouchedLane) {
                         isBallThrown = false; // Prevent this from running again until next throw
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
                         }, 5000); // 5-second timer
                     } else {
+                     console.log('dropped');
                         // This case handles a ball dropped on the ground without touching the lane.
                         // It's not a valid play, so just reset the throw state.
                         isBallThrown = false;
@@ -1054,7 +1059,7 @@ function animate(timestamp, frame) {
                         pinHUD.visible = !pinHUD.visible;
                         if (pinHUD.visible && laneObject) {
                             const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
                             if (scoreboard) {
                                 pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
@@ -1206,7 +1211,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
 
-    const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
+    const ballInitialPosition = { x: 0, y: fY + 0.5, z: -1 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
     const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
@@ -1588,10 +1593,10 @@ function updateFloorAndLanePosition(yDelta = 0) {
 
         // Also update scoreboard and pin HUD positions if they are visible
         if (scoreboard && scoreboard.visible) {
-            scoreboard.position.set(newPos.x, newPos.y + 1.5, newPos.z - 2);
+            scoreboard.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
         }
         if (pinHUD && pinHUD.visible) {
-            pinHUD.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
+            pinHUD.position.set(newPos.x, newPos.y + 1.5, newPos.z - 2);
         }
     }
     if (floorBody) {
