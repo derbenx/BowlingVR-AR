@@ -196,6 +196,7 @@ async function main() {
             window.renderer = renderer;
             window.scene = scene;
             window.getBallContacts = getBallContacts;
+            window.resetPins = resetPins;
             window.testModeReady = true; // Signal that the test environment is ready
         })();
     } else {
@@ -345,7 +346,7 @@ function animate(timestamp, frame) {
                 pinsFallenResetTimer = setTimeout(() => {
                     resetPins();
                     pinsFallenResetTimer = null;
-                }, 5000);
+                }, 2000);
             }
         }
 
@@ -878,10 +879,6 @@ function resetPins() {
     if (pinsFallenResetTimer) {
         clearTimeout(pinsFallenResetTimer);
         pinsFallenResetTimer = null;
-    }
-    if (rollCompletionTimer) {
-        clearTimeout(rollCompletionTimer);
-        rollCompletionTimer = null;
     }
     allPinsFallen = false;
 
