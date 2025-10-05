@@ -722,7 +722,14 @@ function animate(timestamp, frame) {
             if (started) { // "started" is true for the beginning of a contact
                 if ((handle1 === ballColliderHandle && handle2 === laneColliderHandle) ||
                     (handle1 === laneColliderHandle && handle2 === ballColliderHandle)) {
-                    ballHasTouchedLane = true;
+                      //console.log(ball.mesh.position.z);
+                     if (ball.mesh.position.z>=-0.860) {
+                      //console.log('nope');
+                     } else {
+                      //console.log('touch');
+                      ballHasTouchedLane = true;
+                     }
+                    
                 }
             }
         });
@@ -793,35 +800,46 @@ function animate(timestamp, frame) {
         }
 
         // --- SCORING LOGIC: Roll Completion Detection ---
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        const ballContacts = getBallContacts();
+        if (ball && gameMode === 'scoring' && !isGameOver) {
+         //console.log(ball.mesh.position.z);
+         //console.log(ball.mesh.position.z<-0.850);
+         //console.log(ballHasTouchedLane);
+          if (ballContacts.includes('ground') && !rollCompletionTimer) {
+           if (!ballHasTouchedLane) {
+            isBallThrown = false; // Reset the throw state.
+            // And we do nothing else, as requested. The turn does not proceed.
+           } 
+          }
+        }
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
-            const ball = dynamicObjects.find(obj => obj.isBall);
+
             if (ball) {
                 const isSleeping = ball.body.isSleeping();
                 //const ballLocation = getBallLocationState(); //old method
                 //const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
-                const ballContacts = getBallContacts();
+               
                 const isOutOfPlay = ballContacts.includes('gutter') || ballContacts.includes('ground');
+
 
                 // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
 
                        // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
-    if (ballContacts.includes('ground') && !ballHasTouchedLane) {
-        isBallThrown = false; // Reset the throw state.
-        // And we do nothing else, as requested. The turn does not proceed.
-    }
+
     // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
-    else if (ballContacts.includes('gutter') || ballHasTouchedLane) {
+    if (ballContacts.includes('gutter') || ballHasTouchedLane) {
                         // isBallThrown is intentionally kept true here.
                         // It will be reset inside endTurn() -> resetBall() after the timer.
                         rollCompletionTimer = setTimeout(() => {
                             endTurn();
                             rollCompletionTimer = null;
                         }, 5000); // 5-second timer
-                    } else {
+    } else {
                      console.log("doesn't happen?");
                      isBallThrown = false;
-                    }
+    }
                 }
             }
         }
@@ -1086,7 +1104,7 @@ function animate(timestamp, frame) {
                         pinHUD.visible = !pinHUD.visible;
                         if (pinHUD.visible && laneObject) {
                             const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
                             if (scoreboard) {
                                 pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
@@ -1629,7 +1647,7 @@ function updateFloorAndLanePosition(yDelta = 0) {
             scoreboard.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
         }
         if (pinHUD && pinHUD.visible) {
-            pinHUD.position.set(newPos.x, newPos.y + 1.5, newPos.z - 2);
+            pinHUD.position.set(newPos.x, newPos.y + 1.5, newPos.z - 3);
         }
     }
     if (floorBody) {
@@ -1736,6 +1754,7 @@ async function init() {
     
     renderer.setAnimationLoop(animate);
 
+    /*
     function onSelectStart(event) {
         const controller = event.target;
         if (holdingController === null) {
@@ -1767,7 +1786,41 @@ async function init() {
             }
         }
     }
+*/
 
+//when the ball has touched the lane and is on the ground. I can't pick up and no reset is called.
+
+function onSelectStart(event) {
+    const controller = event.target;
+    if (holdingController === null) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            const ballContacts = getBallContacts();
+            // In scoring mode, if a ball has been thrown, it cannot be grabbed until the turn is over.
+            // The isBallThrown flag is the definitive state for a turn in progress.
+            if (gameMode === 'scoring' && ballHasTouchedLane) {
+                return;
+            }
+
+            const linvel = ball.body.linvel();
+            const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
+
+            const isBelowLane = ballContacts.includes('gutter') || ballContacts.includes('ground');
+
+            if (!isMoving || isBelowLane) {
+                // In freeplay mode, picking up the ball should clear the fallen pins.
+                if (gameMode === 'freeplay') {
+                    clearFallenPins();
+                }
+
+                // Set the collision group immediately to prevent collision on the next physics step.
+                ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+                // Register the intent to hold, which will be processed in the animate loop after the next physics step.
+                controllerWantsToHold = controller;
+            }
+        }
+    }
+}
     function onSelectEnd(event) {
         const controller = event.target;
         if (holdingController === controller) {
