@@ -30,14 +30,22 @@ export class AudioManager {
         const source = this.audioContext.createBufferSource();
         source.buffer = this.brownNoiseBuffer;
 
-        const gainNode = this.audioContext.createGain();
-        gainNode.gain.setValueAtTime(1, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.15);
+        // Low-pass filter to create a deep "thud"
+        const lowpass = this.audioContext.createBiquadFilter();
+        lowpass.type = 'lowpass';
+        lowpass.frequency.setValueAtTime(100, this.audioContext.currentTime); // Cut off high frequencies
 
-        source.connect(gainNode);
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(1.0, this.audioContext.currentTime);
+        // A slightly longer decay for a heavier feel
+        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.25);
+
+        source.connect(lowpass);
+        lowpass.connect(gainNode);
         gainNode.connect(this.masterGain);
+
         source.start();
-        source.stop(this.audioContext.currentTime + 0.2);
+        source.stop(this.audioContext.currentTime + 0.3);
     }
 
     startRollingSound() {
@@ -85,23 +93,40 @@ export class AudioManager {
     playPinHit() {
         if (!this.audioContext) return;
 
-        // White noise for the sharp 'crack'
-        const bufferSize = this.audioContext.sampleRate * 0.2; // 0.2 seconds
-        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
-        const output = buffer.getChannelData(0);
-        for (let i = 0; i < bufferSize; i++) {
-            output[i] = Math.random() * 2 - 1;
+        // --- Low-frequency component for "body" ---
+        const brownSource = this.audioContext.createBufferSource();
+        brownSource.buffer = this.brownNoiseBuffer;
+        const brownGain = this.audioContext.createGain();
+        brownGain.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+        brownGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+        const brownFilter = this.audioContext.createBiquadFilter();
+        brownFilter.type = 'lowpass';
+        brownFilter.frequency.setValueAtTime(400, this.audioContext.currentTime);
+        brownSource.connect(brownFilter);
+        brownFilter.connect(brownGain);
+        brownGain.connect(this.masterGain);
+
+        // --- High-frequency component for "crack" ---
+        const whiteBufferSize = this.audioContext.sampleRate * 0.1; // Shorter crack sound
+        const whiteBuffer = this.audioContext.createBuffer(1, whiteBufferSize, this.audioContext.sampleRate);
+        const whiteOutput = whiteBuffer.getChannelData(0);
+        for (let i = 0; i < whiteBufferSize; i++) {
+            whiteOutput[i] = Math.random() * 2 - 1;
         }
+        const whiteSource = this.audioContext.createBufferSource();
+        whiteSource.buffer = whiteBuffer;
+        const whiteGain = this.audioContext.createGain();
+        whiteGain.gain.setValueAtTime(0.2, this.audioContext.currentTime); // Less intense
+        whiteGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+        const whiteFilter = this.audioContext.createBiquadFilter();
+        whiteFilter.type = 'highpass';
+        whiteFilter.frequency.setValueAtTime(1000, this.audioContext.currentTime); // Just the high frequencies
+        whiteSource.connect(whiteFilter);
+        whiteFilter.connect(whiteGain);
+        whiteGain.connect(this.masterGain);
 
-        const source = this.audioContext.createBufferSource();
-        source.buffer = buffer;
-
-        const gainNode = this.audioContext.createGain();
-        gainNode.gain.setValueAtTime(0.4, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.15);
-
-        source.connect(gainNode);
-        gainNode.connect(this.masterGain);
-        source.start();
+        // Start both sounds
+        brownSource.start();
+        whiteSource.start();
     }
 }
