@@ -653,6 +653,14 @@ async function main() {
         });
         document.body.appendChild(arButton);
 
+        // Add a click listener to the AR button to resume the audio context.
+        // This is the most reliable way to handle browser autoplay policies.
+        arButton.addEventListener('click', () => {
+            if (audioManager && audioManager.audioContext.state === 'suspended') {
+                audioManager.audioContext.resume();
+            }
+        });
+
         renderer.xr.addEventListener('sessionstart', () => {
             if (audioManager && audioManager.audioContext.state === 'suspended') {
                 audioManager.audioContext.resume();
