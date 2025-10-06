@@ -2,7 +2,7 @@ export class AudioManager {
     constructor() {
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
         this.masterGain = this.audioContext.createGain();
-        this.masterGain.gain.setValueAtTime(0.5, this.audioContext.currentTime);
+        this.masterGain.gain.setValueAtTime(1.0, this.audioContext.currentTime); // Master volume increased
         this.masterGain.connect(this.audioContext.destination);
 
         this.rollingSound = null;
@@ -36,7 +36,7 @@ export class AudioManager {
         lowpass.frequency.setValueAtTime(100, this.audioContext.currentTime); // Cut off high frequencies
 
         const gainNode = this.audioContext.createGain();
-        gainNode.gain.setValueAtTime(1.0, this.audioContext.currentTime);
+        gainNode.gain.setValueAtTime(1.5, this.audioContext.currentTime); // Boosted thump volume
         // A slightly longer decay for a heavier feel
         gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.25);
 
@@ -97,11 +97,11 @@ export class AudioManager {
         const brownSource = this.audioContext.createBufferSource();
         brownSource.buffer = this.brownNoiseBuffer;
         const brownGain = this.audioContext.createGain();
-        brownGain.gain.setValueAtTime(0.3, this.audioContext.currentTime);
+        brownGain.gain.setValueAtTime(0.6, this.audioContext.currentTime); // Increased gain for more bass
         brownGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
         const brownFilter = this.audioContext.createBiquadFilter();
         brownFilter.type = 'lowpass';
-        brownFilter.frequency.setValueAtTime(400, this.audioContext.currentTime);
+        brownFilter.frequency.setValueAtTime(250, this.audioContext.currentTime); // Lowered frequency for deeper bass
         brownSource.connect(brownFilter);
         brownFilter.connect(brownGain);
         brownGain.connect(this.masterGain);
@@ -116,7 +116,7 @@ export class AudioManager {
         const whiteSource = this.audioContext.createBufferSource();
         whiteSource.buffer = whiteBuffer;
         const whiteGain = this.audioContext.createGain();
-        whiteGain.gain.setValueAtTime(0.2, this.audioContext.currentTime); // Less intense
+        whiteGain.gain.setValueAtTime(0.15, this.audioContext.currentTime); // Slightly less intense crackle
         whiteGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
         const whiteFilter = this.audioContext.createBiquadFilter();
         whiteFilter.type = 'highpass';
