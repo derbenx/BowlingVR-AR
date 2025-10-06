@@ -1,1 +1,0 @@
-Couldn't find the requested file /rapier.mjs in @dimforge/rapier3d-compat.

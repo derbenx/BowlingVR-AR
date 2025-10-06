@@ -441,40 +441,48 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 }
 
 function endTurn() {
-    // This is the new central function to manage the game state after a roll.
-    processRoll(); // Update scores first
+    processRoll(); // This updates currentFrame, currentRoll, and scoreData
 
     if (isGameOver) {
-        // processRoll already handles the 'Game Over' dialog
-        return;
+        return; // Game is over, do nothing.
     }
 
-    // --- Determine if a pin reset is needed ---
-    const isEndOfStandardFrame = currentFrame < 9 && currentRoll === 0;
+    let fullPinReset = false;
 
-    let needsReset = false;
-    if (currentFrame === 9) { // 10th Frame Logic
+    // Condition 1: A new frame is starting for frames 1-9.
+    // This is indicated by currentRoll being 0 after processRoll has run.
+    if (currentFrame < 9 && currentRoll === 0) {
+        fullPinReset = true;
+    }
+
+    // Condition 2: Handling the 10th frame logic.
+    if (currentFrame === 9) {
         const frame10 = scoreData[9];
         const firstRollWasStrike = frame10.rolls[0] === 'X';
         const isSpareOnSecond = frame10.rolls[1] === '/';
 
-        // Reset after the first roll if it was a strike.
+        // Reset for the 2nd ball if the 1st was a strike.
         if (currentRoll === 1 && firstRollWasStrike) {
-            needsReset = true;
+            fullPinReset = true;
         }
-        // Reset after the second roll if a bonus ball was earned (strike on first, or spare).
+        // Reset for the 3rd ball if it was earned via a strike or spare.
         else if (currentRoll === 2 && (firstRollWasStrike || isSpareOnSecond)) {
-            needsReset = true;
+            fullPinReset = true;
         }
     }
 
+    // This handles the transition from frame 9 to 10. If the 9th frame was a strike,
+    // currentRoll becomes 0 and currentFrame becomes 9. The next roll is the first
+    // in the 10th, which needs a full rack.
+    if (currentFrame === 9 && currentRoll === 0) {
+        fullPinReset = true;
+    }
 
-    if (isEndOfStandardFrame || needsReset) {
-        // Full reset for a new frame or a bonus ball on a fresh rack.
+
+    if (fullPinReset) {
         resetPins();
     } else {
-        // This is for the second roll of a frame where not all pins were knocked down.
-        // We just hide the fallen pins and reset the ball.
+        // This case only happens on the 2nd roll of an open frame (including the 10th).
         const fallenPins = getFallenPins();
         for (const pin of fallenPins) {
             pin.mesh.visible = false;
@@ -1114,20 +1122,13 @@ function animate(timestamp, frame) {
                 // Handle Pin HUD toggle (either controller, thumbstick press is 3)
                 if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState[i]) {
                     hudButtonState[i] = true;
-
-                    // Check if the grip button is also held, and if so, tip the pins for debugging.
-                    if (controller.gamepad.buttons[1] && controller.gamepad.buttons[1].pressed) {
-                        tipAllPins();
-                    } else {
-                        // Otherwise, perform the normal HUD toggle action.
-                        if (pinHUD) {
-                            pinHUD.visible = !pinHUD.visible;
-                            if (pinHUD.visible && laneObject) {
-                                const lanePosition = laneObject.mesh.position;
-                                pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
-                                if (scoreboard) {
-                                    pinHUD.quaternion.copy(scoreboard.quaternion);
-                                }
+                    if (pinHUD) {
+                        pinHUD.visible = !pinHUD.visible;
+                        if (pinHUD.visible && laneObject) {
+                            const lanePosition = laneObject.mesh.position;
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
+                            if (scoreboard) {
+                                pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
                         }
                     }
@@ -1528,24 +1529,6 @@ function resetPins() {
 
     // Reset the ball's position
     resetBall();
-}
-
-function tipAllPins() {
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-    if (pins.length === 0) return;
-
-    for (const pin of pins) {
-        if (pin.body) {
-            // Apply a small, slightly randomized impulse to make them fall over.
-            const impulse = {
-                x: (Math.random() - 0.5) * 0.01,
-                y: 0,
-                z: (Math.random() - 0.5) * 0.01
-            };
-            // The second argument `true` wakes the rigid-body if it's sleeping.
-            pin.body.applyImpulse(impulse, true);
-        }
-    }
 }
  /*
 function getBallLocationState() {
