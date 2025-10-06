@@ -3,7 +3,7 @@ const dbg = 0;
 
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { AudioManager } from './AudioManager.js';
+import { AudioManager } from './js/AudioManager.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
@@ -654,6 +654,9 @@ async function main() {
         document.body.appendChild(arButton);
 
         renderer.xr.addEventListener('sessionstart', () => {
+            if (audioManager && audioManager.audioContext.state === 'suspended') {
+                audioManager.audioContext.resume();
+            }
             // Scene setup is handled in the animate loop for AR
         });
         renderer.xr.addEventListener('sessionend', cleanupScene);
@@ -747,8 +750,11 @@ function animate(timestamp, frame) {
             // Ball-Lane collision
             if ((isBall1 && isLane2) || (isBall2 && isLane1)) {
                 const ball = isBall1 ? obj1 : obj2;
-                if (ball.mesh.position.z <= -0.860) {
+                if (ball.mesh.position.z <= -0.860 && !ballHasTouchedLane) {
                     ballHasTouchedLane = true;
+                    if (audioManager) {
+                        audioManager.playThump();
+                    }
                 }
             }
         });
@@ -1841,6 +1847,10 @@ async function init() {
 //when the ball has touched the lane and is on the ground. I can't pick up and no reset is called.
 
 function onSelectStart(event) {
+    // Resume audio context on any interaction, just in case.
+    if (audioManager && audioManager.audioContext.state === 'suspended') {
+        audioManager.audioContext.resume();
+    }
     const controller = event.target;
     if (holdingController === null) {
         const ball = dynamicObjects.find(obj => obj.isBall);
@@ -1892,9 +1902,6 @@ function onSelectStart(event) {
                 ball.body.setAngvel(angularVelocity, true);
                 isBallThrown = true;
                 ballHasTouchedLane = false; // Reset lane contact flag on throw
-                if (audioManager) {
-                    audioManager.playThump();
-                }
             }
             holdingController = null;
         }
