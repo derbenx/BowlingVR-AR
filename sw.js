@@ -46,6 +46,7 @@ if (!swEnabled) {
         'manifest.json',
         'version.json',
         'main.js',
+        'js/AudioManager.js',
         '3d/bowling.glb',
         'js/three/build/three.module.js',
         'js/three/examples/jsm/loaders/GLTFLoader.js',

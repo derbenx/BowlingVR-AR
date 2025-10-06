@@ -3,6 +3,7 @@ const dbg = 0;
 
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
+import { AudioManager } from './AudioManager.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
@@ -53,6 +54,8 @@ let hudButtonState = [false, false];
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
+let audioManager;
+let lastPinHitTime = 0;
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
@@ -712,24 +715,40 @@ function animate(timestamp, frame) {
     // --- COLLISION EVENT HANDLING ---
     if (eventQueue) {
         eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-            const ball = dynamicObjects.find(obj => obj.isBall);
-            if (!ball || !laneObject || !laneObject.collider) return;
+            if (!started) return; // Only process the start of a collision
 
-            const ballColliderHandle = ball.collider.handle;
-            const laneColliderHandle = laneObject.collider.handle;
+            const collider1 = world.getCollider(handle1);
+            const collider2 = world.getCollider(handle2);
+            if (!collider1 || !collider2) return;
 
-            // Check if the collision involves the ball and the lane
-            if (started) { // "started" is true for the beginning of a contact
-                if ((handle1 === ballColliderHandle && handle2 === laneColliderHandle) ||
-                    (handle1 === laneColliderHandle && handle2 === ballColliderHandle)) {
-                      //console.log(ball.mesh.position.z);
-                     if (ball.mesh.position.z>=-0.860) {
-                      //console.log('nope');
-                     } else {
-                      //console.log('touch');
-                      ballHasTouchedLane = true;
-                     }
-                    
+            const obj1 = colliderToObjectMap.get(handle1);
+            const obj2 = colliderToObjectMap.get(handle2);
+            if (!obj1 || !obj2) return;
+
+            const isBall1 = obj1.isBall;
+            const isPin1 = obj1.isPin;
+            const isLane1 = obj1.name === 'lane';
+
+            const isBall2 = obj2.isBall;
+            const isPin2 = obj2.isPin;
+            const isLane2 = obj2.name === 'lane';
+
+            // Ball-Pin collision
+            if ((isBall1 && isPin2) || (isBall2 && isPin1)) {
+                if (audioManager) {
+                    const now = audioManager.audioContext.currentTime;
+                    if (now - lastPinHitTime > 0.05) { // 50ms cooldown
+                        audioManager.playPinHit();
+                        lastPinHitTime = now;
+                    }
+                }
+            }
+
+            // Ball-Lane collision
+            if ((isBall1 && isLane2) || (isBall2 && isLane1)) {
+                const ball = isBall1 ? obj1 : obj2;
+                if (ball.mesh.position.z <= -0.860) {
+                    ballHasTouchedLane = true;
                 }
             }
         });
@@ -772,6 +791,29 @@ function animate(timestamp, frame) {
 
 
     renderer.render(scene, camera);
+
+    // --- AUDIO HANDLING ---
+    if (audioManager) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball && !holdingController && ballHasTouchedLane) {
+            const isOnLane = getBallContacts().includes('lane');
+            const linvel = ball.body.linvel();
+            const speed = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length();
+
+            if (isOnLane && speed > 0.2) {
+                audioManager.startRollingSound();
+                // Map speed to a reasonable playback rate (e.g., 0.5 to 2.0)
+                const rate = 0.5 + Math.min(speed / 8, 1.5);
+                audioManager.setRollRate(rate);
+            } else {
+                audioManager.stopRollingSound();
+            }
+        } else if (audioManager) {
+            // Stop sound if ball is held or doesn't exist
+            audioManager.stopRollingSound();
+        }
+    }
+
 
     if (pinHUD && pinHUD.visible) {
         // Update pin states in real-time for the HUD before drawing it
@@ -1454,6 +1496,9 @@ function getFallenPins() {
 function resetBall() {
     const ball = dynamicObjects.find(obj => obj.isBall);
     if (ball) {
+        if (audioManager) {
+            audioManager.stopRollingSound();
+        }
         // If the ball was being held, release it
         if (holdingController) {
             holdingController = null;
@@ -1685,6 +1730,9 @@ function setLanePosition(position) {
 }
 
 function cleanupScene() {
+    if (audioManager) {
+        audioManager.stopRollingSound();
+    }
     // Dismiss any active UI
     if (activeConfirmationDialog) {
         activeConfirmationDialog.userData.dismiss();
@@ -1730,6 +1778,8 @@ function cleanupScene() {
 }
 
 async function init() {
+    audioManager = new AudioManager();
+
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 2, 5); // Move camera up and back
     camera.lookAt(0, 0, 0);
@@ -1813,6 +1863,10 @@ function onSelectStart(event) {
                     clearFallenPins();
                 }
 
+                if (audioManager) {
+                    audioManager.stopRollingSound();
+                }
+
                 // Set the collision group immediately to prevent collision on the next physics step.
                 ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
                 // Register the intent to hold, which will be processed in the animate loop after the next physics step.
@@ -1838,6 +1892,9 @@ function onSelectStart(event) {
                 ball.body.setAngvel(angularVelocity, true);
                 isBallThrown = true;
                 ballHasTouchedLane = false; // Reset lane contact flag on throw
+                if (audioManager) {
+                    audioManager.playThump();
+                }
             }
             holdingController = null;
         }
