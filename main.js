@@ -442,10 +442,6 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 
 function endTurn() {
     // This is the new central function to manage the game state after a roll.
-    // 1. It processes the score.
-    // 2. It checks if the game is over.
-    // 3. It determines whether to do a full reset or just prepare for the next roll.
-
     processRoll(); // Update scores first
 
     if (isGameOver) {
@@ -453,14 +449,32 @@ function endTurn() {
         return;
     }
 
-    // After a strike or the second roll of a frame, processRoll sets currentRoll to 0.
-    // This is our cue for a full pin reset.
-    if (currentRoll === 0) {
-        resetPins();
+    // --- Determine if a pin reset is needed ---
+    const isEndOfStandardFrame = currentFrame < 9 && currentRoll === 0;
+
+    let needsReset = false;
+    if (currentFrame === 9) { // 10th Frame Logic
+        const frame10 = scoreData[9];
+        const firstRollWasStrike = frame10.rolls[0] === 'X';
+        const isSpareOnSecond = frame10.rolls[1] === '/';
+
+        // Reset after the first roll if it was a strike.
+        if (currentRoll === 1 && firstRollWasStrike) {
+            needsReset = true;
+        }
+        // Reset after the second roll if a bonus ball was earned (strike on first, or spare).
+        else if (currentRoll === 2 && (firstRollWasStrike || isSpareOnSecond)) {
+            needsReset = true;
+        }
     }
-    // Otherwise, it was the first roll of a frame, so we just hide the fallen pins
-    // and reset the ball for the second shot.
-    else {
+
+
+    if (isEndOfStandardFrame || needsReset) {
+        // Full reset for a new frame or a bonus ball on a fresh rack.
+        resetPins();
+    } else {
+        // This is for the second roll of a frame where not all pins were knocked down.
+        // We just hide the fallen pins and reset the ball.
         const fallenPins = getFallenPins();
         for (const pin of fallenPins) {
             pin.mesh.visible = false;
@@ -1100,13 +1114,20 @@ function animate(timestamp, frame) {
                 // Handle Pin HUD toggle (either controller, thumbstick press is 3)
                 if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState[i]) {
                     hudButtonState[i] = true;
-                    if (pinHUD) {
-                        pinHUD.visible = !pinHUD.visible;
-                        if (pinHUD.visible && laneObject) {
-                            const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
-                            if (scoreboard) {
-                                pinHUD.quaternion.copy(scoreboard.quaternion);
+
+                    // Check if the grip button is also held, and if so, tip the pins for debugging.
+                    if (controller.gamepad.buttons[1] && controller.gamepad.buttons[1].pressed) {
+                        tipAllPins();
+                    } else {
+                        // Otherwise, perform the normal HUD toggle action.
+                        if (pinHUD) {
+                            pinHUD.visible = !pinHUD.visible;
+                            if (pinHUD.visible && laneObject) {
+                                const lanePosition = laneObject.mesh.position;
+                                pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
+                                if (scoreboard) {
+                                    pinHUD.quaternion.copy(scoreboard.quaternion);
+                                }
                             }
                         }
                     }
@@ -1479,6 +1500,7 @@ function resetBall() {
 }
 
 function resetPins() {
+    pinsDownLastRoll = 0;
     // The confirmation dialog is dismissed by the input handler that calls this.
     // No need to dismiss it here.
     if (pinsFallenResetTimer) {
@@ -1506,6 +1528,24 @@ function resetPins() {
 
     // Reset the ball's position
     resetBall();
+}
+
+function tipAllPins() {
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    if (pins.length === 0) return;
+
+    for (const pin of pins) {
+        if (pin.body) {
+            // Apply a small, slightly randomized impulse to make them fall over.
+            const impulse = {
+                x: (Math.random() - 0.5) * 0.01,
+                y: 0,
+                z: (Math.random() - 0.5) * 0.01
+            };
+            // The second argument `true` wakes the rigid-body if it's sleeping.
+            pin.body.applyImpulse(impulse, true);
+        }
+    }
 }
  /*
 function getBallLocationState() {
