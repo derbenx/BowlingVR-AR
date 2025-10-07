@@ -1,9 +1,139 @@
 // BUTTONS [ trigger:0, grip:1, stick: 3, A/X: 4, B/Y: 5, options: 12 ]
 const dbg = 0;
 
+class AudioManager {
+    constructor() {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.masterGain = this.audioContext.createGain();
+        this.masterGain.gain.setValueAtTime(2.0, this.audioContext.currentTime);
+        this.masterGain.connect(this.audioContext.destination);
+
+        this.rollingSound = null;
+        this.brownNoiseBuffer = this._createBrownNoise();
+        this.lastPinHitTime = 0;
+    }
+
+    _createBrownNoise() {
+        const bufferSize = this.audioContext.sampleRate * 2; // 2 seconds
+        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const output = buffer.getChannelData(0);
+        let lastOut = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+            const white = Math.random() * 2 - 1;
+            output[i] = (lastOut + (0.02 * white)) / 1.02;
+            lastOut = output[i];
+            output[i] *= 3.5; // (roughly) compensate for gain
+        }
+        return buffer;
+    }
+
+    playThump() {
+        if (!this.audioContext) return;
+        const source = this.audioContext.createBufferSource();
+        source.buffer = this.brownNoiseBuffer;
+
+        const lowpass = this.audioContext.createBiquadFilter();
+        lowpass.type = 'lowpass';
+        lowpass.frequency.setValueAtTime(100, this.audioContext.currentTime);
+
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(2.5, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.25);
+
+        source.connect(lowpass);
+        lowpass.connect(gainNode);
+        gainNode.connect(this.masterGain);
+
+        source.start();
+        source.stop(this.audioContext.currentTime + 0.3);
+    }
+
+    startRollingSound() {
+        if (this.rollingSound || !this.audioContext) return;
+        this.rollingSound = {};
+        this.rollingSound.source = this.audioContext.createBufferSource();
+        this.rollingSound.source.buffer = this.brownNoiseBuffer;
+        this.rollingSound.source.loop = true;
+
+        this.rollingSound.gain = this.audioContext.createGain();
+        this.rollingSound.gain.gain.setValueAtTime(0, this.audioContext.currentTime);
+        this.rollingSound.gain.gain.linearRampToValueAtTime(0.5, this.audioContext.currentTime + 0.1);
+
+        this.rollingSound.lowpass = this.audioContext.createBiquadFilter();
+        this.rollingSound.lowpass.type = 'lowpass';
+        this.rollingSound.lowpass.frequency.setValueAtTime(200, this.audioContext.currentTime);
+
+        this.rollingSound.source.connect(this.rollingSound.lowpass);
+        this.rollingSound.lowpass.connect(this.rollingSound.gain);
+        this.rollingSound.gain.connect(this.masterGain);
+
+        this.rollingSound.source.start();
+    }
+
+    stopRollingSound() {
+        if (!this.rollingSound) return;
+        this.rollingSound.gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.2);
+        this.rollingSound.source.stop(this.audioContext.currentTime + 0.2);
+        this.rollingSound = null;
+    }
+
+    setRollRate(rate) {
+        if (!this.rollingSound) return;
+        const clampedRate = Math.max(0.5, Math.min(2.0, rate));
+        this.rollingSound.source.playbackRate.setValueAtTime(clampedRate, this.audioContext.currentTime);
+
+        const newFreq = 200 + (clampedRate - 1) * 100;
+        this.rollingSound.lowpass.frequency.setValueAtTime(newFreq, this.audioContext.currentTime);
+    }
+
+    playPinHit() {
+        if (!this.audioContext) return;
+
+        const now = this.audioContext.currentTime;
+        if (now - this.lastPinHitTime < 0.05) { // 50ms cooldown
+            return;
+        }
+        this.lastPinHitTime = now;
+
+        // Low-frequency component for "body"
+        const brownSource = this.audioContext.createBufferSource();
+        brownSource.buffer = this.brownNoiseBuffer;
+        const brownGain = this.audioContext.createGain();
+        brownGain.gain.setValueAtTime(1.8, this.audioContext.currentTime);
+        brownGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+        const brownFilter = this.audioContext.createBiquadFilter();
+        brownFilter.type = 'lowpass';
+        brownFilter.frequency.setValueAtTime(150, this.audioContext.currentTime);
+        brownSource.connect(brownFilter);
+        brownFilter.connect(brownGain);
+        brownGain.connect(this.masterGain);
+
+        // High-frequency component for "crack"
+        const whiteBufferSize = this.audioContext.sampleRate * 0.1;
+        const whiteBuffer = this.audioContext.createBuffer(1, whiteBufferSize, this.audioContext.sampleRate);
+        const whiteOutput = whiteBuffer.getChannelData(0);
+        for (let i = 0; i < whiteBufferSize; i++) {
+            whiteOutput[i] = Math.random() * 2 - 1;
+        }
+        const whiteSource = this.audioContext.createBufferSource();
+        whiteSource.buffer = whiteBuffer;
+        const whiteGain = this.audioContext.createGain();
+        whiteGain.gain.setValueAtTime(0.08, this.audioContext.currentTime);
+        whiteGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+        const whiteFilter = this.audioContext.createBiquadFilter();
+        whiteFilter.type = 'highpass';
+        whiteFilter.frequency.setValueAtTime(1200, this.audioContext.currentTime);
+        whiteSource.connect(whiteFilter);
+        whiteFilter.connect(whiteGain);
+        whiteGain.connect(this.masterGain);
+
+        brownSource.start();
+        whiteSource.start();
+    }
+}
+
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
-import { AudioManager } from './js/AudioManager.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { ConvexGeometry } from 'three/addons/geometries/ConvexGeometry.js';
@@ -55,7 +185,6 @@ let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let audioManager;
-let lastPinHitTime = 0;
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
@@ -653,8 +782,6 @@ async function main() {
         });
         document.body.appendChild(arButton);
 
-        // Add a click listener to the AR button to resume the audio context.
-        // This is the most reliable way to handle browser autoplay policies.
         arButton.addEventListener('click', () => {
             if (audioManager && audioManager.audioContext.state === 'suspended') {
                 audioManager.audioContext.resume();
@@ -726,11 +853,7 @@ function animate(timestamp, frame) {
     // --- COLLISION EVENT HANDLING ---
     if (eventQueue) {
         eventQueue.drainCollisionEvents((handle1, handle2, started) => {
-            if (!started) return; // Only process the start of a collision
-
-            const collider1 = world.getCollider(handle1);
-            const collider2 = world.getCollider(handle2);
-            if (!collider1 || !collider2) return;
+            if (!started) return;
 
             const obj1 = colliderToObjectMap.get(handle1);
             const obj2 = colliderToObjectMap.get(handle2);
@@ -746,23 +869,16 @@ function animate(timestamp, frame) {
 
             // Ball-Pin collision
             if ((isBall1 && isPin2) || (isBall2 && isPin1)) {
-                if (audioManager) {
-                    const now = audioManager.audioContext.currentTime;
-                    if (now - lastPinHitTime > 0.05) { // 50ms cooldown
-                        audioManager.playPinHit();
-                        lastPinHitTime = now;
-                    }
+                const pin = isPin1 ? obj1 : obj2;
+                if (audioManager && !pin.isFallen) {
+                    audioManager.playPinHit();
                 }
             }
 
             // Ball-Lane collision
             if ((isBall1 && isLane2) || (isBall2 && isLane1)) {
-                const ball = isBall1 ? obj1 : obj2;
-                if (ball.mesh.position.z <= -0.860 && !ballHasTouchedLane) {
-                    ballHasTouchedLane = true;
-                    if (audioManager) {
-                        audioManager.playThump();
-                    }
+                if (audioManager) {
+                    audioManager.playThump();
                 }
             }
         });
@@ -809,25 +925,24 @@ function animate(timestamp, frame) {
     // --- AUDIO HANDLING ---
     if (audioManager) {
         const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball && !holdingController && ballHasTouchedLane) {
-            const isOnLane = getBallContacts().includes('lane');
+        if (ball && !holdingController) {
+            const ballContacts = getBallContacts();
+            const isOnLane = ballContacts.includes('lane');
+            const isInGutter = ballContacts.includes('gutter');
             const linvel = ball.body.linvel();
             const speed = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length();
 
-            if (isOnLane && speed > 0.2) {
+            if ((isOnLane || isInGutter) && speed > 0.2) {
                 audioManager.startRollingSound();
-                // Map speed to a reasonable playback rate (e.g., 0.5 to 2.0)
                 const rate = 0.5 + Math.min(speed / 8, 1.5);
                 audioManager.setRollRate(rate);
             } else {
                 audioManager.stopRollingSound();
             }
         } else if (audioManager) {
-            // Stop sound if ball is held or doesn't exist
             audioManager.stopRollingSound();
         }
     }
-
 
     if (pinHUD && pinHUD.visible) {
         // Update pin states in real-time for the HUD before drawing it
@@ -1793,7 +1908,6 @@ function cleanupScene() {
 
 async function init() {
     audioManager = new AudioManager();
-
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 2, 5); // Move camera up and back
     camera.lookAt(0, 0, 0);
@@ -1855,10 +1969,6 @@ async function init() {
 //when the ball has touched the lane and is on the ground. I can't pick up and no reset is called.
 
 function onSelectStart(event) {
-    // Resume audio context on any interaction, just in case.
-    if (audioManager && audioManager.audioContext.state === 'suspended') {
-        audioManager.audioContext.resume();
-    }
     const controller = event.target;
     if (holdingController === null) {
         const ball = dynamicObjects.find(obj => obj.isBall);
