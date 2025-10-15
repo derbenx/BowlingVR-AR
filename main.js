@@ -1,6 +1,137 @@
 // BUTTONS [ trigger:0, grip:1, stick: 3, A/X: 4, B/Y: 5, options: 12 ]
 const dbg = 0;
 
+class AudioManager {
+    constructor() {
+        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        this.masterGain = this.audioContext.createGain();
+        this.masterGain.gain.setValueAtTime(2.0, this.audioContext.currentTime);
+        this.masterGain.connect(this.audioContext.destination);
+        //this.audioContext.volume = 1;
+
+        this.rollingSound = null;
+        this.brownNoiseBuffer = this._createBrownNoise();
+        this.lastPinHitTime = 0;
+    }
+
+    _createBrownNoise() {
+        const bufferSize = this.audioContext.sampleRate * 2; // 2 seconds
+        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
+        const output = buffer.getChannelData(0);
+        let lastOut = 0.0;
+        for (let i = 0; i < bufferSize; i++) {
+            const white = Math.random() * 2 - 1;
+            output[i] = (lastOut + (0.02 * white)) / 1.02;
+            lastOut = output[i];
+            output[i] *= 5; // (roughly) compensate for gain
+        }
+        return buffer;
+    }
+
+    playThump() {
+        if (!this.audioContext) return;
+        const source = this.audioContext.createBufferSource();
+        source.buffer = this.brownNoiseBuffer;
+
+        const lowpass = this.audioContext.createBiquadFilter();
+        lowpass.type = 'lowpass';
+        lowpass.frequency.setValueAtTime(100, this.audioContext.currentTime);
+
+        const gainNode = this.audioContext.createGain();
+        gainNode.gain.setValueAtTime(5, this.audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(1, this.audioContext.currentTime + 0.25);
+
+        source.connect(lowpass);
+        lowpass.connect(gainNode);
+        gainNode.connect(this.masterGain);
+
+        source.start();
+        source.stop(this.audioContext.currentTime + 0.3);
+    }
+
+    startRollingSound() {
+        if (this.rollingSound || !this.audioContext) return;
+        this.rollingSound = {};
+        this.rollingSound.source = this.audioContext.createBufferSource();
+        this.rollingSound.source.buffer = this.brownNoiseBuffer;
+        this.rollingSound.source.loop = true;
+
+        this.rollingSound.gain = this.audioContext.createGain();
+        this.rollingSound.gain.gain.setValueAtTime(0, this.audioContext.currentTime);
+        this.rollingSound.gain.gain.linearRampToValueAtTime(0.05, this.audioContext.currentTime + 0.001);
+
+        this.rollingSound.lowpass = this.audioContext.createBiquadFilter();
+        this.rollingSound.lowpass.type = 'lowpass';
+        this.rollingSound.lowpass.frequency.setValueAtTime(200, this.audioContext.currentTime);
+
+        this.rollingSound.source.connect(this.rollingSound.lowpass);
+        this.rollingSound.lowpass.connect(this.rollingSound.gain);
+        this.rollingSound.gain.connect(this.masterGain);
+
+        this.rollingSound.source.start();
+    }
+
+    stopRollingSound() {
+        if (!this.rollingSound) return;
+        this.rollingSound.gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.2);
+        this.rollingSound.source.stop(this.audioContext.currentTime + 0.2);
+        this.rollingSound = null;
+    }
+
+    setRollRate(rate) {
+        if (!this.rollingSound) return;
+        const clampedRate = Math.max(0.5, Math.min(2.0, rate));
+        this.rollingSound.source.playbackRate.setValueAtTime(clampedRate, this.audioContext.currentTime);
+
+        const newFreq = 200 + (clampedRate - 1) * 100;
+        this.rollingSound.lowpass.frequency.setValueAtTime(newFreq, this.audioContext.currentTime);
+    }
+
+    playPinHit() {
+        if (!this.audioContext) return;
+
+        const now = this.audioContext.currentTime;
+        if (now - this.lastPinHitTime < 0.05) { // 50ms cooldown
+            return;
+        }
+        this.lastPinHitTime = now;
+
+        // Low-frequency component for "body"
+        const brownSource = this.audioContext.createBufferSource();
+        brownSource.buffer = this.brownNoiseBuffer;
+        const brownGain = this.audioContext.createGain();
+        brownGain.gain.setValueAtTime(1, this.audioContext.currentTime);
+        brownGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+        const brownFilter = this.audioContext.createBiquadFilter();
+        brownFilter.type = 'lowpass';
+        brownFilter.frequency.setValueAtTime(150, this.audioContext.currentTime);
+        brownSource.connect(brownFilter);
+        brownFilter.connect(brownGain);
+        brownGain.connect(this.masterGain);
+
+        // High-frequency component for "crack"
+        const whiteBufferSize = this.audioContext.sampleRate * 0.1;
+        const whiteBuffer = this.audioContext.createBuffer(1, whiteBufferSize, this.audioContext.sampleRate);
+        const whiteOutput = whiteBuffer.getChannelData(0);
+        for (let i = 0; i < whiteBufferSize; i++) {
+            whiteOutput[i] = Math.random() * 2 - 1;
+        }
+        const whiteSource = this.audioContext.createBufferSource();
+        whiteSource.buffer = whiteBuffer;
+        const whiteGain = this.audioContext.createGain();
+        whiteGain.gain.setValueAtTime(0.08, this.audioContext.currentTime);
+        whiteGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
+        const whiteFilter = this.audioContext.createBiquadFilter();
+        whiteFilter.type = 'highpass';
+        whiteFilter.frequency.setValueAtTime(1200, this.audioContext.currentTime);
+        whiteSource.connect(whiteFilter);
+        whiteFilter.connect(whiteGain);
+        whiteGain.connect(this.masterGain);
+
+        brownSource.start();
+        //whiteSource.start();
+    }
+}
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
@@ -18,24 +149,24 @@ const GROUP_FLOOR = 1 << 3;
 // Defines what a group is and what it collides with.
 // The 16 left-most bits are memberships, the 16 right-most bits are the filter.
 const LANE_COLLISION_GROUP = (GROUP_LANE << 16) | (GROUP_BALL | GROUP_PINS);
-// Ball collides with Lane, Pins, and Floor
+// Ball collides with heightLane, Pins, and Floor
 const BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_PINS | GROUP_FLOOR);
-// Held ball collides with Lane and Floor
-const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_LANE | GROUP_FLOOR);
-// Pins collide with the Ball, other Pins, and the Lane (but NOT the infinite floor)
-const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE);
-// Floor collides with the Ball ONLY
-const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL);
+// Held ball collides with Floor
+const HELD_BALL_COLLISION_GROUP = (GROUP_BALL << 16) | (GROUP_FLOOR);
+// Pins collide with the Ball, other Pins, and the Lane and floor
+const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GROUP_LANE| GROUP_FLOOR);
+// Floor collides with the Ball ands pins
+const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
-let world, planes;
+let world, planes, eventQueue;
 let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor;
+let pinModel, pinVertices, fY_floor, pinHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -49,21 +180,24 @@ let activeConfirmationDialog = null;
 let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
-let hudButtonState = false;
+let hudButtonState = [false, false];
 let selectedMenuIndex = 0;
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
+let audioManager;
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
 let currentRoll = 0;
 let isGameOver = false;
 let isBallThrown = false;
+let ballHasTouchedLane = false;
 let pinsDownLastRoll = 0;
 let pinHUD = null;
 let debugDisplay = null;
 let laneObject = null;
 let floorBody = null;
+let colliderToObjectMap = new Map();
 let controllerWantsToHold = null;
 let showCollision=0;//debug stuff
 let showButtons = 0;
@@ -142,7 +276,7 @@ function updateGameModeUI() {
             // Position the scoreboard above the lane
             if (laneObject) {
                 const lanePosition = laneObject.mesh.position;
-                scoreboard.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                scoreboard.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
             }
             scoreboard.visible = true;
             startNewGame();
@@ -439,26 +573,48 @@ function processTenthFrameRoll(fallenPins, fallenThisRoll) {
 }
 
 function endTurn() {
-    // This is the new central function to manage the game state after a roll.
-    // 1. It processes the score.
-    // 2. It checks if the game is over.
-    // 3. It determines whether to do a full reset or just prepare for the next roll.
-
-    processRoll(); // Update scores first
+    processRoll(); // This updates currentFrame, currentRoll, and scoreData
 
     if (isGameOver) {
-        // processRoll already handles the 'Game Over' dialog
-        return;
+        return; // Game is over, do nothing.
     }
 
-    // After a strike or the second roll of a frame, processRoll sets currentRoll to 0.
-    // This is our cue for a full pin reset.
-    if (currentRoll === 0) {
-        resetPins();
+    let fullPinReset = false;
+
+    // Condition 1: A new frame is starting for frames 1-9.
+    // This is indicated by currentRoll being 0 after processRoll has run.
+    if (currentFrame < 9 && currentRoll === 0) {
+        fullPinReset = true;
     }
-    // Otherwise, it was the first roll of a frame, so we just hide the fallen pins
-    // and reset the ball for the second shot.
-    else {
+
+    // Condition 2: Handling the 10th frame logic.
+    if (currentFrame === 9) {
+        const frame10 = scoreData[9];
+        const firstRollWasStrike = frame10.rolls[0] === 'X';
+        const isSpareOnSecond = frame10.rolls[1] === '/';
+
+        // Reset for the 2nd ball if the 1st was a strike.
+        if (currentRoll === 1 && firstRollWasStrike) {
+            fullPinReset = true;
+        }
+        // Reset for the 3rd ball if it was earned via a strike or spare.
+        else if (currentRoll === 2 && (firstRollWasStrike || isSpareOnSecond)) {
+            fullPinReset = true;
+        }
+    }
+
+    // This handles the transition from frame 9 to 10. If the 9th frame was a strike,
+    // currentRoll becomes 0 and currentFrame becomes 9. The next roll is the first
+    // in the 10th, which needs a full rack.
+    if (currentFrame === 9 && currentRoll === 0) {
+        fullPinReset = true;
+    }
+
+
+    if (fullPinReset) {
+        resetPins();
+    } else {
+        // This case only happens on the 2nd roll of an open frame (including the 10th).
         const fallenPins = getFallenPins();
         for (const pin of fallenPins) {
             pin.mesh.visible = false;
@@ -470,8 +626,15 @@ function endTurn() {
 function processRoll() {
     if (isGameOver) return;
 
+    // First, update the fallen state of all pins based on the new logic
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    for (const pin of pins) {
+        getPinContacts(pin); // This function now updates the pin's isFallen property
+    }
+
+    // Now, get the list of pins that are marked as fallen
     const fallenPins = getFallenPins();
-    const fallenThisRoll = fallenPins.length - pinsDownLastRoll;
+    const fallenThisRoll = Math.max(0, fallenPins.length - pinsDownLastRoll);
 
     if (currentFrame === 9) {
         processTenthFrameRoll(fallenPins, fallenThisRoll);
@@ -510,7 +673,7 @@ function createPinHUD() {
     hudMesh.userData.canvas = canvas;
     hudMesh.userData.context = context;
 
-    hudMesh.visible = false; // Initially hidden
+    hudMesh.visible = true;
     scene.add(hudMesh);
 
     return hudMesh;
@@ -523,7 +686,7 @@ function drawPinHUD() {
     const canvas = pinHUD.userData.canvas;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.0)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Pin positions in a standard bowling triangle layout
@@ -547,18 +710,13 @@ function drawPinHUD() {
     const pins = dynamicObjects.filter(obj => obj.isPin);
 
     pinLayout.forEach((pos, index) => {
-        let isStanding = false;
         const pin = pins.find(p => p.pinId === index); // Find pin by its unique ID
-        if (pin) {
-            const up = new THREE.Vector3(0, 1, 0);
-            const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-            const pinUp = up.clone().applyQuaternion(quaternion);
-            isStanding = pinUp.y >= 0.5;
-        }
+        // The pin is standing if it exists and is NOT marked as fallen.
+        const isStanding = pin && !pin.isFallen;
 
         ctx.beginPath();
         ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = isStanding ? 'white' : '#555';
+        ctx.fillStyle = isStanding ? 'white' : 'black';
         ctx.fill();
     });
 
@@ -619,34 +777,63 @@ async function main() {
     document.body.appendChild(renderer.domElement);
 
     world = new RAPIER.World(gravity);
-    world.integrationParameters.dt = 1/120; //90fps ?
+    eventQueue = new RAPIER.EventQueue(true);
+    world.integrationParameters.dt = 1/120;
 
-    const arButton = ARButton.createButton(renderer, {
-        requiredFeatures: ['local-floor', 'plane-detection']
-    });
-    document.body.appendChild(arButton);
+    const urlParams = new URLSearchParams(window.location.search);
+    const isTestMode = urlParams.has('test');
 
-    renderer.xr.addEventListener('sessionstart', () => {
-        // Scene setup is now handled in the animate loop
-    });
-
-    renderer.xr.addEventListener('sessionend', cleanupScene);
-
-    // Setup plane detection
-    planes = new XRPlanes(renderer);
-    scene.add(planes);
-    planes.visible = false;
-
-    if (navigator.xr && navigator.xr.isSessionSupported) {
-        navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-          if (supported && navigator.xr.requestSession) {
-            navigator.xr.requestSession('immersive-vr', {
-              optionalFeatures: ['local-floor','plane-detection'],
-            })
-            .then((session) => {renderer.xr.setSession(session);});
-          }
+    if (isTestMode) {
+        // In test mode, bypass AR and set up the scene directly
+        sceneSetupInitiated = true;
+        fY_floor = 0; // Assume flat ground for testing
+        (async () => {
+            await placeScene(fY_floor, loader, world, dynamicObjects);
+            updateGameModeUI();
+            // Expose functions for Playwright testing
+            window.createConfirmationDialog = createConfirmationDialog;
+            window.renderer = renderer;
+            window.scene = scene;
+            window.getBallContacts = getBallContacts;
+            window.testModeReady = true; // Signal that the test environment is ready
+        })();
+    } else {
+        // Standard AR mode initialization
+        const arButton = ARButton.createButton(renderer, {
+            requiredFeatures: ['local-floor', 'plane-detection']
         });
-      }
+        document.body.appendChild(arButton);
+
+        arButton.addEventListener('click', () => {
+            if (audioManager && audioManager.audioContext.state === 'suspended') {
+                audioManager.audioContext.resume();
+            }
+        });
+
+        renderer.xr.addEventListener('sessionstart', () => {
+            if (audioManager && audioManager.audioContext.state === 'suspended') {
+                audioManager.audioContext.resume();
+            }
+            // Scene setup is handled in the animate loop for AR
+        });
+        renderer.xr.addEventListener('sessionend', cleanupScene);
+
+        planes = new XRPlanes(renderer);
+        // scene.add(planes); // Only add if needed for debugging
+        // planes.visible = false;
+
+        if (navigator.xr && navigator.xr.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+                if (supported && navigator.xr.requestSession) {
+                    navigator.xr.requestSession('immersive-vr', {
+                        optionalFeatures: ['local-floor', 'plane-detection'],
+                    }).then((session) => {
+                        renderer.xr.setSession(session);
+                    });
+                }
+            });
+        }
+    }
 
     init();
 }
@@ -683,7 +870,62 @@ function animate(timestamp, frame) {
     }
 
     // Step the physics world first
-    if(world) world.step();
+    if(world) world.step(eventQueue);
+
+    // --- COLLISION EVENT HANDLING ---
+    if (eventQueue) {
+        eventQueue.drainCollisionEvents((handle1, handle2, started) => {
+            const ball = dynamicObjects.find(obj => obj.isBall);
+            if (!ball || !laneObject || !laneObject.collider) return;
+
+            const ballColliderHandle = ball.collider.handle;
+            const laneColliderHandle = laneObject.collider.handle;
+
+            // Check if the collision involves the ball and the lane
+            if (started) { // "started" is true for the beginning of a contact
+                if ((handle1 === ballColliderHandle && handle2 === laneColliderHandle) ||
+                    (handle1 === laneColliderHandle && handle2 === ballColliderHandle)) {
+                      //console.log(ball.mesh.position.z);
+                     if (ball.mesh.position.z>=-0.860) {
+                      //console.log('nope');
+                     } else {
+                      //console.log('touch');
+                      ballHasTouchedLane = true;
+                     }
+                    
+                }
+            }
+            
+            if (!started) return;
+
+            const obj1 = colliderToObjectMap.get(handle1);
+            const obj2 = colliderToObjectMap.get(handle2);
+            if (!obj1 || !obj2) return;
+
+            const isBall1 = obj1.isBall;
+            const isPin1 = obj1.isPin;
+            const isLane1 = obj1.name === 'lane';
+
+            const isBall2 = obj2.isBall;
+            const isPin2 = obj2.isPin;
+            const isLane2 = obj2.name === 'lane';
+
+            // Ball-Pin collision
+            if ((isBall1 && isPin2) || (isBall2 && isPin1)) {
+                const pin = isPin1 ? obj1 : obj2;
+                if (audioManager && !pin.isFallen) {
+                    audioManager.playPinHit();
+                }
+            }
+
+            // Ball-Lane collision
+            if ((isBall1 && isLane2) || (isBall2 && isLane1)) {
+                if (audioManager) {
+                    audioManager.playThump();
+                }
+            }
+        });
+    }
 
     // If a grab was initiated in the last frame, complete it now.
     // This one-frame delay ensures the collision group change is processed before the ball is moved.
@@ -723,7 +965,33 @@ function animate(timestamp, frame) {
 
     renderer.render(scene, camera);
 
+    // --- AUDIO HANDLING ---
+    if (audioManager) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball && !holdingController) {
+            const ballContacts = getBallContacts();
+            const isOnLane = ballContacts.includes('lane');
+            const isInGutter = ballContacts.includes('gutter');
+            const linvel = ball.body.linvel();
+            const speed = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length();
+
+            if ((isOnLane || isInGutter) && speed > 0.2) {
+                audioManager.startRollingSound();
+                const rate = 0.5 + Math.min(speed / 8, 1.5);
+                audioManager.setRollRate(rate);
+            } else {
+                audioManager.stopRollingSound();
+            }
+        } else if (audioManager) {
+            audioManager.stopRollingSound();
+        }
+    }
     if (pinHUD && pinHUD.visible) {
+        // Update pin states in real-time for the HUD before drawing it
+        const pins = dynamicObjects.filter(obj => obj.isPin);
+        for (const pin of pins) {
+            getPinContacts(pin);
+        }
         drawPinHUD();
     }
 
@@ -739,27 +1007,52 @@ function animate(timestamp, frame) {
                     pinsFallenResetTimer = setTimeout(() => {
                         resetPins();
                         pinsFallenResetTimer = null;
-                    }, 4000);
+                    }, 5000);
                 }
             }
         }
 
         // --- SCORING LOGIC: Roll Completion Detection ---
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        const ballContacts = getBallContacts();
+        if (ball && gameMode === 'scoring' && !isGameOver) {
+         //console.log(ball.mesh.position.z);
+         //console.log(ball.mesh.position.z<-0.850);
+         //console.log(ballHasTouchedLane);
+          if (ballContacts.includes('ground') && !rollCompletionTimer) {
+           if (!ballHasTouchedLane) {
+            isBallThrown = false; // Reset the throw state.
+            // And we do nothing else, as requested. The turn does not proceed.
+           } 
+          }
+        }
         if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
-            const ball = dynamicObjects.find(obj => obj.isBall);
+
             if (ball) {
                 const isSleeping = ball.body.isSleeping();
-                const ballLocation = getBallLocationState();
-                const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+                //const ballLocation = getBallLocationState(); //old method
+                //const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
+               
+                const isOutOfPlay = ballContacts.includes('gutter') || ballContacts.includes('ground');
 
-                // If the ball has stopped or is out of play, and a timer isn't already running,
-                // start the end-of-turn timer.
+
+                // If the ball has stopped or is out of play, and a timer isn't already running...
                 if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
-                    isBallThrown = false; // Prevent this from running again until next throw
-                    rollCompletionTimer = setTimeout(() => {
-                        endTurn();
-                        rollCompletionTimer = null;
-                    }, 5000); // 5-second timer
+
+                       // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
+
+    // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
+    if (ballContacts.includes('gutter') || ballHasTouchedLane) {
+                        // isBallThrown is intentionally kept true here.
+                        // It will be reset inside endTurn() -> resetBall() after the timer.
+                        rollCompletionTimer = setTimeout(() => {
+                            endTurn();
+                            rollCompletionTimer = null;
+                        }, 5000); // 5-second timer
+    } else {
+                     console.log("doesn't happen?");
+                     isBallThrown = false;
+    }
                 }
             }
         }
@@ -899,8 +1192,11 @@ function animate(timestamp, frame) {
                 // --- DEFAULT GAME INPUT HANDLING ---
                 else {
                     // Handle floor height adjustment with grip and thumbstick
-                    const ballLocation = getBallLocationState();
-                    const canAdjust = ballLocation !== 'lane';
+                    //const ballLocation = getBallLocationState();
+                    //const canAdjust = ballLocation !== 'lane';
+                    const ballContacts = getBallContacts();
+                    const canAdjust = !ballContacts.includes('lane');
+
 
                     if (controller.gamepad.buttons[1].pressed && canAdjust) { // Grip button
                         if (!gripButtonState[i]) {
@@ -918,7 +1214,7 @@ function animate(timestamp, frame) {
                             floorOffsetSaveTimer = setTimeout(() => {
                                 localStorage.setItem('floorOffset', floorOffset);
                                 floorOffsetSaveTimer = null;
-                            }, 120000);
+                            }, 20000);
                         }
                     } else if (gripButtonState[i]) {
                         gripButtonState[i] = false;
@@ -996,13 +1292,17 @@ function animate(timestamp, frame) {
                                 selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
                                 optionsMenu.userData.update();
 
-                                const cameraPosition = new THREE.Vector3();
-                                camera.getWorldPosition(cameraPosition);
-                                const cameraQuaternion = new THREE.Quaternion();
-                                camera.getWorldQuaternion(cameraQuaternion);
-                                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-                                optionsMenu.position.copy(cameraPosition).add(forward.multiplyScalar(1.5));
-                                optionsMenu.quaternion.copy(cameraQuaternion);
+                                // Position the options menu above the lane, similar to the scoreboard
+                                if (laneObject) {
+                                    const lanePosition = laneObject.mesh.position;
+                                    optionsMenu.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
+                                    if (scoreboard) {
+                                        optionsMenu.quaternion.copy(scoreboard.quaternion);
+                                    }
+                                } else {
+                                    // Fallback position if the lane doesn't exist yet
+                                    optionsMenu.position.set(0, 1.5, -3);
+                                }
                             }
                         }
                     } else if (controller.gamepad.buttons[12] && !controller.gamepad.buttons[12].pressed) {
@@ -1011,20 +1311,21 @@ function animate(timestamp, frame) {
                 }
 
                 // Handle Pin HUD toggle (either controller, thumbstick press is 3)
-                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState) {
-                    hudButtonState = true;
+                if (controller.gamepad.buttons[3] && controller.gamepad.buttons[3].pressed && !hudButtonState[i]) {
+                 //tipAllPins();
+                    hudButtonState[i] = true;
                     if (pinHUD) {
                         pinHUD.visible = !pinHUD.visible;
                         if (pinHUD.visible && laneObject) {
                             const lanePosition = laneObject.mesh.position;
-                            pinHUD.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
+                            pinHUD.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 3);
                             if (scoreboard) {
                                 pinHUD.quaternion.copy(scoreboard.quaternion);
                             }
                         }
                     }
                 } else if (controller.gamepad.buttons[3] && !controller.gamepad.buttons[3].pressed) {
-                    hudButtonState = false;
+                    hudButtonState[i] = false;
                 }
             }
         }
@@ -1033,7 +1334,7 @@ function animate(timestamp, frame) {
 
 async function placeScene(fY, loader, world, dynamicObjects) {
     // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/lane.glb');
+    const laneGltf = await loader.loadAsync('3d/bowling.glb');
 
         // Visual ground and Physics Ground
         const groundMesh = laneGltf.scene;
@@ -1042,45 +1343,92 @@ async function placeScene(fY, loader, world, dynamicObjects) {
         // We will set its final position after creating all components.
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
         const laneBody = world.createRigidBody(laneBodyDesc);
-        laneObject = { mesh: groundMesh, body: laneBody };
+        laneObject = { mesh: groundMesh, body: laneBody, name: 'lane' };
 
-    // Create a trimesh collider that is correctly scaled to the visual model
+    if (showCollision) {
+        laneCollisionVisualizer = new THREE.Group();
+        scene.add(laneCollisionVisualizer);
+    }
+
+    let ballMesh;
+
+    // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
             child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            // The body is at the origin, so its position is (0,0,0).
-            // This means the transformed vertices will be in the body's local space, which is what we want.
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                // 1. Transform vertex to world space using the mesh's world matrix
-                tempVec.applyMatrix4(child.matrixWorld);
-                // 2. Transform vertex from world space to the rigid body's local space
-                tempVec.sub(bodyPosition);
+            if (child.name === 'lane') {
+              //child.visible = false;
+                // Create a box collider for the lane for more reliable physics
+                const boundingBox = new THREE.Box3().setFromObject(child);
+                const size = boundingBox.getSize(new THREE.Vector3());
+                const center = boundingBox.getCenter(new THREE.Vector3());
 
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
-            }
+                // The collider's position is relative to the rigid body. Since the body is at the origin,
+                // the collider's translation is the mesh's world center.
+                center.sub(bodyPosition);
 
-            const indices = child.geometry.index.array;
-            const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices).setRestitution(0.0).setCollisionGroups(LANE_COLLISION_GROUP);
-            world.createCollider(trimeshDesc, laneBody);
+                const cuboidDesc = RAPIER.ColliderDesc.cuboid(size.x / 2, size.y / 2, size.z / 2)
+                    .setTranslation(center.x, center.y, center.z)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP)
+                    .setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+                cuboidDesc.userData = { name: 'lane' };
+                const laneCollider = world.createCollider(cuboidDesc, laneBody);
+                laneObject.collider = laneCollider;
+                colliderToObjectMap.set(laneCollider.handle, laneObject);
 
-            if (showCollision){
-                // Create and add the visualizer mesh
-                const visualizerGeo = new THREE.BufferGeometry();
-                visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
-                visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
-                const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
-                laneCollisionVisualizer = new THREE.Mesh(visualizerGeo, visualizerMat);
-                // Position it at the rigid body's location (which is currently the origin)
-                laneCollisionVisualizer.position.copy(bodyPosition);
-                scene.add(laneCollisionVisualizer);
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BoxGeometry(size.x, size.y, size.z);
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    visualizerMesh.position.copy(center);
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
+
+            } else if (child.name === 'gutter') {
+                // Create a trimesh collider for the gutter to match its complex shape
+                const originalVertices = child.geometry.attributes.position.array;
+                const transformedVertices = new Float32Array(originalVertices.length);
+                const tempVec = new THREE.Vector3();
+
+                for (let i = 0; i < originalVertices.length; i += 3) {
+                    tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
+                    // Transform vertex to world space, then to the rigid body's local space
+                    tempVec.applyMatrix4(child.matrixWorld);
+                    tempVec.sub(bodyPosition);
+                    transformedVertices[i] = tempVec.x;
+                    transformedVertices[i+1] = tempVec.y;
+                    transformedVertices[i+2] = tempVec.z;
+                }
+
+                const indices = child.geometry.index.array;
+                const trimeshDesc = RAPIER.ColliderDesc.trimesh(transformedVertices, indices)
+                    .setRestitution(0.0)
+                    .setCollisionGroups(LANE_COLLISION_GROUP);
+                trimeshDesc.userData = { name: 'gutter' };
+                const gutterCollider = world.createCollider(trimeshDesc, laneBody);
+                // The gutter is part of the lane body, but we map its specific collider
+                colliderToObjectMap.set(gutterCollider.handle, { name: 'gutter' });
+
+                if (showCollision) {
+                    const visualizerGeo = new THREE.BufferGeometry();
+                    visualizerGeo.setAttribute('position', new THREE.BufferAttribute(transformedVertices, 3));
+                    visualizerGeo.setIndex(new THREE.BufferAttribute(indices, 1));
+                    const visualizerMat = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5 });
+                    const visualizerMesh = new THREE.Mesh(visualizerGeo, visualizerMat);
+                    // The vertices are already in the body's local space, so the mesh position is (0,0,0) relative to the group.
+                    laneCollisionVisualizer.add(visualizerMesh);
+                }
+            } else if (child.name === 'ball') {
+                ballMesh = child;
+            } else if (child.name === 'pin') {
+                pinModel = child;
+                child.visible = false; // Hide all original pins from the scene
+            } else {
+                // Hide other meshes in the GLB
+                child.visible = false;
             }
         }
     });
@@ -1097,73 +1445,186 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     const floorColliderDesc = RAPIER.ColliderDesc.cuboid(100, 0.1, 100) // Large cuboid for the floor
         .setCollisionGroups(FLOOR_COLLISION_GROUP)
         .setRestitution(0.2);
-    world.createCollider(floorColliderDesc, floorBody);
+    floorColliderDesc.userData = { name: 'ground' };
+    const floorCollider = world.createCollider(floorColliderDesc, floorBody);
+    colliderToObjectMap.set(floorCollider.handle, { name: 'ground' });
 
     // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
 
     // Create Bowling Ball
-    const ballGltf = await loader.loadAsync('3d/ball.glb');
-    const ballMesh = ballGltf.scene;
+    // The ball is now loaded from the bowling.glb file.
+    // We need to remove it from its original parent to treat it as a separate dynamic object.
+    if (ballMesh && ballMesh.parent) {
+        ballMesh.parent.remove(ballMesh);
+    }
     const ballBox = new THREE.Box3().setFromObject(ballMesh);
 
     // Center the geometry
     const center = ballBox.getCenter(new THREE.Vector3());
-    ballMesh.children.forEach(child => {
-        if (child.isMesh) {
-            child.geometry.translate(-center.x, -center.y, -center.z);
-        }
-    });
+    //if (ballMesh.isMesh) {
+        //ballMesh.geometry.translate(-center.x, -center.y, -center.z);
+    //}
     ballBox.setFromObject(ballMesh); // Recalculate the box after centering
 
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
 
-    const ballInitialPosition = { x: 0, y: fY + 0.5, z: -2 };
+    const ballInitialPosition = { x: 0, y: fY + 0.5, z: -1 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
     const ballBody = world.createRigidBody(ballBodyDesc);
-    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setRestitution(0.01).setMass(9999).setFriction(.8).setCollisionGroups(BALL_COLLISION_GROUP);
+    const ballColliderDesc = RAPIER.ColliderDesc.ball(ballRadius).setCollisionGroups(BALL_COLLISION_GROUP).setMass(1).setActiveEvents(RAPIER.ActiveEvents.COLLISION_EVENTS);
+    ballColliderDesc.userData = { name: 'ball' };
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    dynamicObjects.push({ mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true });
+    const ballObject = { mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true, name: 'ball' };
+    dynamicObjects.push(ballObject);
+    colliderToObjectMap.set(ballCollider.handle, ballObject);
     scene.add(ballMesh);
     ballMesh.visible = true;
 
     // Create Bowling Pins
-    const pinGltf = await loader.loadAsync('3d/pin.glb');
-    pinModel = pinGltf.scene;
-    
-    pinModel.traverse(child => {
-        if (child.isMesh) {
-            child.updateMatrixWorld(true);
-            const originalVertices = child.geometry.attributes.position.array;
-            const transformedVertices = new Float32Array(originalVertices.length);
-            const tempVec = new THREE.Vector3();
-            for (let i = 0; i < originalVertices.length; i += 3) {
-                tempVec.set(originalVertices[i], originalVertices[i+1], originalVertices[i+2]);
-                tempVec.applyMatrix4(child.matrixWorld);
-                transformedVertices[i] = tempVec.x;
-                transformedVertices[i+1] = tempVec.y;
-                transformedVertices[i+2] = tempVec.z;
+     //const pinGltf = await loader.loadAsync('3d/pin.glb');
+     //pinModel = pinGltf.scene;
+ 
+    // Create a new, perfect pin template that is both visually correct and physically stable.
+    if (pinModel && pinModel.isMesh) {
+        // 1. Clone the geometry to preserve UVs, normals, etc., for correct texturing.
+        const correctedGeometry = pinModel.geometry.clone();
+
+        // 2. Apply the mesh's world matrix to the cloned geometry's vertices to get their true positions.
+        correctedGeometry.applyMatrix4(pinModel.matrixWorld);
+
+        // 3. Calculate the true center of the transformed geometry.
+        correctedGeometry.computeBoundingBox();
+        const trueCenter = new THREE.Vector3();
+        correctedGeometry.boundingBox.getCenter(trueCenter);
+
+        // 4. Translate the geometry so its center is at the origin (0,0,0).
+        correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+
+        // 5. The corrected geometry's vertices are now perfect for the physics engine.
+        pinVertices = correctedGeometry.attributes.position.array;
+
+        // 6. Create the new pin template mesh using the corrected geometry and original material.
+        pinModel = new THREE.Mesh(correctedGeometry, pinModel.material.clone());
+
+        // 7. Calculate height from the new, correct geometry for accurate spawning.
+        pinModel.geometry.computeBoundingBox();
+        pinHeight = pinModel.geometry.boundingBox.max.y - pinModel.geometry.boundingBox.min.y;
+    }
+
+    createPins(fY + floorOffset);
+  
+}
+
+function getBallContacts() {
+    // If the ball is being held, that's its primary state.
+    if (holdingController) {
+        return ['in-hand'];
+    }
+    const ball = dynamicObjects.find(obj => obj.isBall);
+    if (!ball || !ball.collider) {
+        return [];
+    }
+
+    const contactNames = new Set(); // Use a Set to avoid duplicates
+
+    world.contactPairsWith(ball.collider, (otherCollider) => {
+        const contactObject = colliderToObjectMap.get(otherCollider.handle);
+        let name = null;
+
+        if (contactObject && contactObject.name) {
+            name = contactObject.name;
+        } else if (otherCollider.userData && otherCollider.userData.name) {
+            name = otherCollider.userData.name;
+        }
+
+        if (name) {
+            // Group all pins under a single 'pin' name for simplicity
+            if (name.startsWith('pin_')) {
+                contactNames.add('pin');
+            } else {
+                contactNames.add(name);
             }
-            pinVertices = transformedVertices;
         }
     });
 
-    createPins(fY);
+    return Array.from(contactNames);
 }
+
+function getPinContacts(pinObject) {
+    if (!pinObject || !pinObject.collider) {
+        return [];
+    }
+
+    const contactNames = new Set();
+
+    world.contactPairsWith(pinObject.collider, (otherCollider) => {
+        const contactObject = colliderToObjectMap.get(otherCollider.handle);
+        let name = null;
+
+        if (contactObject && contactObject.name) {
+            name = contactObject.name;
+        } else if (otherCollider.userData && otherCollider.userData.name) {
+            name = otherCollider.userData.name;
+        }
+
+        if (name) {
+            contactNames.add(name);
+        }
+    });
+
+    const contacts = Array.from(contactNames);
+
+    // Check orientation: 5 degrees from vertical is cos(5 * PI/180) which is about 0.9962
+    const up = new THREE.Vector3(0, 1, 0);
+    const quaternion = new THREE.Quaternion().copy(pinObject.body.rotation());
+    const pinUp = up.clone().applyQuaternion(quaternion);
+    const isTippedOver = pinUp.y < 0.9962;
+
+    // Check if pin center is below the lane surface (more reliable than contact detection for this)
+    const laneSurfaceY = fY_floor + floorOffset;
+    const position = pinObject.body.translation();
+    const isBelowLane = position.y < laneSurfaceY;
+
+    // Update pin state if it's not already fallen. Once fallen, it stays fallen.
+    if (!pinObject.isFallen && (isTippedOver || isBelowLane)) {
+        pinObject.isFallen = true;
+    }
+
+    return contacts;
+}
+
+
 
 function createPins(fY) {
     let pinIdCounter = 0;
 
     function createPin(x, z, id) {
         const pinMesh = pinModel.clone();
-        const initialPosition = { x: x, y: fY, z: z };
+        // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
+        const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
         const pinBody = world.createRigidBody(pinBodyDesc);
         const colliderDesc = RAPIER.ColliderDesc.convexHull(pinVertices).setCollisionGroups(PINS_COLLISION_GROUP);
+        colliderDesc.userData = { name: `pin_${id}` }; // Add user data for identification
         const collider = world.createCollider(colliderDesc, pinBody);
-        dynamicObjects.push({ mesh: pinMesh, body: pinBody, initialPosition: initialPosition, isPin: true, pinId: id });
+
+        const pinObject = {
+            mesh: pinMesh,
+            body: pinBody,
+            collider: collider,
+            initialPosition: initialPosition,
+            isPin: true,
+            pinId: id,
+            name: `pin_${id}`,
+            isFallen: false // Initialize isFallen state
+        };
+
+        dynamicObjects.push(pinObject);
+        colliderToObjectMap.set(collider.handle, pinObject); // Map the collider handle to the object
+
         scene.add(pinMesh);
         pinMesh.visible = true;
     }
@@ -1199,33 +1660,24 @@ function clearFallenPins() {
 }
 
 function getFallenPins() {
-    const fallenPins = [];
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-
-    for (const pin of pins) {
-        // Check orientation
-        const up = new THREE.Vector3(0, 1, 0);
-        const quaternion = new THREE.Quaternion().copy(pin.body.rotation());
-        const pinUp = up.clone().applyQuaternion(quaternion);
-        const isTippedOver = pinUp.y < 0.5;
-
-        if (isTippedOver) {
-            fallenPins.push(pin);
-        }
-    }
-    return fallenPins;
+    // This function now simply returns a list of pins that have been marked as fallen.
+    // The logic for determining if a pin is fallen has been moved to getPinContacts().
+    return dynamicObjects.filter(obj => obj.isPin && obj.isFallen);
 }
 
 function resetBall() {
     const ball = dynamicObjects.find(obj => obj.isBall);
     if (ball) {
+        if (audioManager) {
+            audioManager.stopRollingSound();
+        }
         // If the ball was being held, release it
         if (holdingController) {
             holdingController = null;
         }
 
-        // Ensure the ball is a dynamic body and has the correct collision group
-        ball.body.setBodyType(RAPIER.RigidBodyType.Dynamic);
+        // After a reset, the ball should float in place until grabbed.
+        ball.body.setBodyType(RAPIER.RigidBodyType.KinematicPositionBased);
         ball.collider.setCollisionGroups(BALL_COLLISION_GROUP);
 
         // Reset position to its initial spot, accounting for any floor offset changes
@@ -1239,10 +1691,12 @@ function resetBall() {
 
         // Reset throw state
         isBallThrown = false;
+        ballHasTouchedLane = false;
     }
 }
 
 function resetPins() {
+    pinsDownLastRoll = 0;
     // The confirmation dialog is dismissed by the input handler that calls this.
     // No need to dismiss it here.
     if (pinsFallenResetTimer) {
@@ -1272,6 +1726,24 @@ function resetPins() {
     resetBall();
 }
 
+
+function tipAllPins() {
+    const pins = dynamicObjects.filter(obj => obj.isPin);
+    if (pins.length === 0) return;
+    for (const pin of pins) {
+        if (pin.body) {
+            // Apply a small, slightly randomized impulse to make them fall over.
+            const impulse = {
+                x: (Math.random() - 0.5) * 0.01,
+                y: 0,
+                z: (Math.random() - 0.5) * 0.01
+            };
+            // The second argument `true` wakes the rigid-body if it's sleeping.
+            pin.body.applyImpulse(impulse, true);
+        }
+    }
+}
+ /*
 function getBallLocationState() {
     if (holdingController) {
         return 'in-hand';
@@ -1294,7 +1766,7 @@ function getBallLocationState() {
     }
 }
 
-
+*/
 function createConfirmationDialog(title, buttons, renderer) {
     const dialog = new THREE.Group();
     dialog.name = "confirmationDialog";
@@ -1385,15 +1857,17 @@ function createConfirmationDialog(title, buttons, renderer) {
         activeConfirmationDialog = null;
     };
 
-    // Position the dialog in front of the camera
-    const camera = renderer.xr.getCamera();
-    const cameraPosition = new THREE.Vector3();
-    camera.getWorldPosition(cameraPosition);
-    const cameraQuaternion = new THREE.Quaternion();
-    camera.getWorldQuaternion(cameraQuaternion);
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(cameraQuaternion);
-    dialog.position.copy(cameraPosition).add(forward.multiplyScalar(2));
-    dialog.quaternion.copy(cameraQuaternion);
+    // Position the dialog above the lane, similar to the scoreboard
+    if (laneObject) {
+        const lanePosition = laneObject.mesh.position;
+        dialog.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 1);
+        if (scoreboard) {
+            dialog.quaternion.copy(scoreboard.quaternion);
+        }
+    } else {
+        // Fallback position if the lane doesn't exist yet
+        dialog.position.set(0, 1.5, -2);
+    }
 
     return dialog;
 }
@@ -1403,6 +1877,14 @@ function updateFloorAndLanePosition(yDelta = 0) {
         const newPos = laneObject.mesh.position.clone();
         newPos.y = fY_floor + floorOffset;
         setLanePosition(newPos);
+
+        // Also update scoreboard and pin HUD positions if they are visible
+        if (scoreboard && scoreboard.visible) {
+            scoreboard.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
+        }
+        if (pinHUD && pinHUD.visible) {
+            pinHUD.position.set(newPos.x, newPos.y + 1.5, newPos.z - 3);
+        }
     }
     if (floorBody) {
         const floorPosition = floorBody.translation();
@@ -1439,6 +1921,9 @@ function setLanePosition(position) {
 }
 
 function cleanupScene() {
+    if (audioManager) {
+        audioManager.stopRollingSound();
+    }
     // Dismiss any active UI
     if (activeConfirmationDialog) {
         activeConfirmationDialog.userData.dismiss();
@@ -1480,9 +1965,11 @@ function cleanupScene() {
     allPinsFallen = false;
     resetButtonState = [false, false];
     endSessionButtonState = [false, false];
+    colliderToObjectMap.clear();
 }
 
 async function init() {
+    audioManager = new AudioManager();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 2, 5); // Move camera up and back
     camera.lookAt(0, 0, 0);
@@ -1507,16 +1994,23 @@ async function init() {
     
     renderer.setAnimationLoop(animate);
 
+    /*
     function onSelectStart(event) {
         const controller = event.target;
         if (holdingController === null) {
             const ball = dynamicObjects.find(obj => obj.isBall);
             if (ball) {
+                //const ballLocation = getBallLocationState();
+                //if (gameMode === 'scoring' && isBallThrown && ballLocation === 'lane') {
+                 const ballContacts = getBallContacts();
+                 if (gameMode === 'scoring' && isBallThrown && ballContacts.includes('lane')) {
+                    return; //can't grab ball in play
+                }
                 const linvel = ball.body.linvel();
                 const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
-                const ballLocation = getBallLocationState();
 
-                const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
+                //const isBelowLane = ballLocation === 'gutter' || ballLocation === 'ground';
+                const isBelowLane = ballContacts.includes('gutter') || ballContacts.includes('ground');
 
                 if (!isMoving || isBelowLane) {
                     // In freeplay mode, picking up the ball should clear the fallen pins.
@@ -1532,7 +2026,44 @@ async function init() {
             }
         }
     }
+*/
 
+//when the ball has touched the lane and is on the ground. I can't pick up and no reset is called.
+
+function onSelectStart(event) {
+    const controller = event.target;
+    if (holdingController === null) {
+        const ball = dynamicObjects.find(obj => obj.isBall);
+        if (ball) {
+            const ballContacts = getBallContacts();
+            // In scoring mode, if a ball has been thrown, it cannot be grabbed until the turn is over.
+            // The isBallThrown flag is the definitive state for a turn in progress.
+            if (gameMode === 'scoring' && ballHasTouchedLane) {
+                return;
+            }
+
+            const linvel = ball.body.linvel();
+            const isMoving = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length() > 0.1;
+
+            const isBelowLane = ballContacts.includes('gutter') || ballContacts.includes('ground');
+
+            if (!isMoving || isBelowLane) {
+                // In freeplay mode, picking up the ball should clear the fallen pins.
+                if (gameMode === 'freeplay') {
+                    clearFallenPins();
+                }
+
+                if (audioManager) {
+                    audioManager.stopRollingSound();
+                }
+                // Set the collision group immediately to prevent collision on the next physics step.
+                ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
+                // Register the intent to hold, which will be processed in the animate loop after the next physics step.
+                controllerWantsToHold = controller;
+            }
+        }
+    }
+}
     function onSelectEnd(event) {
         const controller = event.target;
         if (holdingController === controller) {
@@ -1549,6 +2080,7 @@ async function init() {
                 ball.body.setLinvel(linearVelocity, true);
                 ball.body.setAngvel(angularVelocity, true);
                 isBallThrown = true;
+                ballHasTouchedLane = false; // Reset lane contact flag on throw
             }
             holdingController = null;
         }
