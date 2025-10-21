@@ -173,6 +173,7 @@ let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
+let currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
 let pinsFallenResetTimer = null;
 let rollCompletionTimer = null;
 let allPinsFallen = false;
@@ -182,6 +183,7 @@ let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = [false, false];
 let selectedMenuIndex = 0;
+let activeMenu = 'main'; // 'main' or 'theme'
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let audioManager;
@@ -208,20 +210,56 @@ let sceneSetupInitiated = false;
 function createOptionsMenu() {
     const menu = new THREE.Group();
     menu.name = "optionsMenu";
-    menu.userData.buttons = [];
+
+    // --- Main Menu ---
+    const mainMenu = new THREE.Group();
+    mainMenu.name = "mainMenu";
+    mainMenu.userData.buttons = [];
+    menu.add(mainMenu);
+
+    // --- Theme Submenu ---
+    const themeMenu = new THREE.Group();
+    themeMenu.name = "themeMenu";
+    themeMenu.userData.buttons = [];
+    themeMenu.visible = false;
+    menu.add(themeMenu);
 
     const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
     const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
-    const panel = new THREE.Mesh(panelGeo, panelMat);
-    menu.add(panel);
+    const mainPanel = new THREE.Mesh(panelGeo, panelMat);
+    mainMenu.add(mainPanel);
+    const themePanel = new THREE.Mesh(panelGeo, panelMat.clone());
+    themeMenu.add(themePanel);
+
+
+    const createButton = (text, yPos, action, value = null) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.5, 0.12);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.y = yPos;
+        mesh.position.z = 0.01;
+        mesh.name = `button_${text.replace(' ', '')}`;
+        mesh.userData = {
+            isButton: true,
+            canvas,
+            context,
+            text,
+            action,
+            value
+        };
+        return mesh;
+    };
 
     const updateButtonAppearance = (button, selected) => {
-        const context = button.userData.context;
-        const canvas = button.userData.canvas;
-        const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+        const { context, canvas, text } = button.userData;
         context.fillStyle = '#444';
         context.fillRect(0, 0, canvas.width, canvas.height);
-        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.strokeStyle = selected ? '#0F0' : '#888';
         context.lineWidth = 10;
         context.strokeRect(0, 0, canvas.width, canvas.height);
         context.fillStyle = 'white';
@@ -232,38 +270,42 @@ function createOptionsMenu() {
         button.material.map.needsUpdate = true;
     };
 
-    function createButton(text, yPos, mode) {
-        const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 128;
-        const context = canvas.getContext('2d');
-        const texture = new THREE.CanvasTexture(canvas);
-        const geometry = new THREE.PlaneGeometry(0.5, 0.15);
-        const material = new THREE.MeshBasicMaterial({ map: texture });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.y = yPos;
-        mesh.position.z = 0.01;
-        mesh.name = `button_${mode}`;
-        mesh.userData.mode = mode;
-        mesh.userData.isButton = true;
-        mesh.userData.canvas = canvas;
-        mesh.userData.context = context;
-        updateButtonAppearance(mesh, false);
-        return mesh;
-    }
 
-    const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
-    const scoringButton = createButton('Scoring', -0.1, 'scoring');
-    menu.add(freePlayButton);
-    menu.add(scoringButton);
-    menu.userData.buttons.push(freePlayButton);
-    menu.userData.buttons.push(scoringButton);
+    // Main Menu Buttons
+    const freePlayButton = createButton('Free Play', 0.15, 'setGameMode', 'freeplay');
+    const scoringButton = createButton('Scoring', 0.0, 'setGameMode', 'scoring');
+    const themeButton = createButton('Theme', -0.15, 'openThemeMenu');
+    mainMenu.add(freePlayButton, scoringButton, themeButton);
+    mainMenu.userData.buttons.push(freePlayButton, scoringButton, themeButton);
+
+    // Theme Menu Buttons
+    const normalThemeButton = createButton('Normal', 0.1, 'setTheme', 'Normal');
+    const halloweenThemeButton = createButton('Halloween', -0.1, 'setTheme', 'Halloween');
+    themeMenu.add(normalThemeButton, halloweenThemeButton);
+    themeMenu.userData.buttons.push(normalThemeButton, halloweenThemeButton);
+
 
     menu.userData.update = () => {
-        menu.userData.buttons.forEach((btn, index) => {
+        const currentButtons = activeMenu === 'main' ? mainMenu.userData.buttons : themeMenu.userData.buttons;
+        currentButtons.forEach((btn, index) => {
             updateButtonAppearance(btn, index === selectedMenuIndex);
         });
+        // Also initialize the appearance of the non-active menu buttons
+        const nonActiveButtons = activeMenu !== 'main' ? mainMenu.userData.buttons : themeMenu.userData.buttons;
+        nonActiveButtons.forEach(btn => updateButtonAppearance(btn, false));
     };
+
+    menu.userData.show = () => {
+        activeMenu = 'main';
+        mainMenu.visible = true;
+        themeMenu.visible = false;
+        // Find index of current game mode and set it as selected
+        const currentModeIndex = mainMenu.userData.buttons.findIndex(button => button.userData.value === gameMode);
+        selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
+        menu.userData.update();
+        menu.visible = true;
+    };
+
 
     menu.visible = false;
     scene.add(menu);
@@ -780,6 +822,8 @@ async function main() {
     eventQueue = new RAPIER.EventQueue(true);
     world.integrationParameters.dt = 1/120;
 
+    await init();
+
     const urlParams = new URLSearchParams(window.location.search);
     const isTestMode = urlParams.has('test');
 
@@ -787,16 +831,15 @@ async function main() {
         // In test mode, bypass AR and set up the scene directly
         sceneSetupInitiated = true;
         fY_floor = 0; // Assume flat ground for testing
-        (async () => {
-            await placeScene(fY_floor, loader, world, dynamicObjects);
-            updateGameModeUI();
-            // Expose functions for Playwright testing
-            window.createConfirmationDialog = createConfirmationDialog;
-            window.renderer = renderer;
-            window.scene = scene;
-            window.getBallContacts = getBallContacts;
-            window.testModeReady = true; // Signal that the test environment is ready
-        })();
+        await placeScene(fY_floor, loader, world, dynamicObjects);
+        updateGameModeUI();
+        // Expose functions for Playwright testing
+        window.createConfirmationDialog = createConfirmationDialog;
+        window.renderer = renderer;
+        window.scene = scene;
+        window.getBallContacts = getBallContacts;
+        window.optionsMenu = optionsMenu;
+        window.testModeReady = true; // Signal that the test environment is ready
     } else {
         // Standard AR mode initialization
         const arButton = ARButton.createButton(renderer, {
@@ -834,8 +877,6 @@ async function main() {
             });
         }
     }
-
-    init();
 }
 
 function animate(timestamp, frame) {
@@ -1139,28 +1180,24 @@ function animate(timestamp, frame) {
 
                     // --- Options Menu Dialog ---
                     if (optionsMenu && optionsMenu.visible) {
-                        const buttons = optionsMenu.userData.buttons;
-                        // Navigation with thumbsticks (either controller)
+                        const menu = optionsMenu.getObjectByName(activeMenu === 'main' ? 'mainMenu' : 'themeMenu');
+                        const buttons = menu.userData.buttons;
+
+                        // Navigation with thumbsticks
                         const thumbstickY = controller.gamepad.axes[3];
                         if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
                             thumbstickYState[i] = -1;
-                            const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
-                            if (oldIndex !== selectedMenuIndex) {
-                                optionsMenu.userData.update();
-                            }
+                            optionsMenu.userData.update();
                         } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
                             thumbstickYState[i] = 1;
-                            const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
-                            if (oldIndex !== selectedMenuIndex) {
-                                optionsMenu.userData.update();
-                            }
+                            optionsMenu.userData.update();
                         } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
                             thumbstickYState[i] = 0;
                         }
 
-                        // Confirm selection with A/X/Trigger (buttons 0, 4)
+                        // Confirm selection
                         const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
                         if (confirmButtonPressed) {
                             if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
@@ -1168,17 +1205,48 @@ function animate(timestamp, frame) {
 
                             const selectedButton = buttons[selectedMenuIndex];
                             if (selectedButton) {
-                                gameMode = selectedButton.userData.mode;
-                                localStorage.setItem('gameMode', gameMode);
-                                optionsMenu.visible = false;
-                                updateGameModeUI();
+                                const { action, value } = selectedButton.userData;
+                                switch (action) {
+                                    case 'setGameMode':
+                                        gameMode = value;
+                                        localStorage.setItem('gameMode', gameMode);
+                                        optionsMenu.visible = false;
+                                        updateGameModeUI();
+                                        break;
+                                    case 'openThemeMenu':
+                                        activeMenu = 'theme';
+                                        optionsMenu.getObjectByName('mainMenu').visible = false;
+                                        optionsMenu.getObjectByName('themeMenu').visible = true;
+                                        const themeIndex = optionsMenu.getObjectByName('themeMenu').userData.buttons.findIndex(b => b.userData.value === currentTheme);
+                                        selectedMenuIndex = themeIndex !== -1 ? themeIndex : 0;
+                                        optionsMenu.userData.update();
+                                        break;
+                                    case 'setTheme':
+                                        currentTheme = value;
+                                        localStorage.setItem('bowlingTheme', currentTheme);
+                                        // applyTheme(currentTheme); // This function will be implemented later
+                                        activeMenu = 'main';
+                                        optionsMenu.getObjectByName('themeMenu').visible = false;
+                                        optionsMenu.getObjectByName('mainMenu').visible = true;
+                                        selectedMenuIndex = 0; // Reset to top of main menu
+                                        optionsMenu.userData.update();
+                                        break;
+                                }
                             }
                         }
 
-                        // Cancel with B/Y (button 5)
+                        // Cancel/Back with B/Y
                         if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                             endSessionButtonState[i] = true;
-                            optionsMenu.visible = false; // Just close it
+                            if (activeMenu === 'theme') {
+                                activeMenu = 'main';
+                                optionsMenu.getObjectByName('themeMenu').visible = false;
+                                optionsMenu.getObjectByName('mainMenu').visible = true;
+                                selectedMenuIndex = 0;
+                                optionsMenu.userData.update();
+                            } else {
+                                optionsMenu.visible = false;
+                            }
                         }
                     }
 
@@ -1274,25 +1342,11 @@ function animate(timestamp, frame) {
                     if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
-                            // If menu is already visible, this press is a CONFIRM action
                             if (optionsMenu.visible) {
-                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
-                                if (selectedButton) {
-                                    gameMode = selectedButton.userData.mode;
-                                    localStorage.setItem('gameMode', gameMode);
-                                    updateGameModeUI();
-                                }
                                 optionsMenu.visible = false;
                             } else {
-                                // If menu is not visible, this press OPENS it
-                                optionsMenu.visible = true;
-
-                                // Find index of current game mode and set it as selected
-                                const currentModeIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
-                                selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
-                                optionsMenu.userData.update();
-
-                                // Position the options menu above the lane, similar to the scoreboard
+                                optionsMenu.userData.show();
+                                // Position the options menu
                                 if (laneObject) {
                                     const lanePosition = laneObject.mesh.position;
                                     optionsMenu.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
@@ -1300,7 +1354,6 @@ function animate(timestamp, frame) {
                                         optionsMenu.quaternion.copy(scoreboard.quaternion);
                                     }
                                 } else {
-                                    // Fallback position if the lane doesn't exist yet
                                     optionsMenu.position.set(0, 1.5, -3);
                                 }
                             }
