@@ -1,137 +1,5 @@
 // BUTTONS [ trigger:0, grip:1, stick: 3, A/X: 4, B/Y: 5, options: 12 ]
 const dbg = 0;
-
-class AudioManager {
-    constructor() {
-        this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        this.masterGain = this.audioContext.createGain();
-        this.masterGain.gain.setValueAtTime(2.0, this.audioContext.currentTime);
-        this.masterGain.connect(this.audioContext.destination);
-        //this.audioContext.volume = 1;
-
-        this.rollingSound = null;
-        this.brownNoiseBuffer = this._createBrownNoise();
-        this.lastPinHitTime = 0;
-    }
-
-    _createBrownNoise() {
-        const bufferSize = this.audioContext.sampleRate * 2; // 2 seconds
-        const buffer = this.audioContext.createBuffer(1, bufferSize, this.audioContext.sampleRate);
-        const output = buffer.getChannelData(0);
-        let lastOut = 0.0;
-        for (let i = 0; i < bufferSize; i++) {
-            const white = Math.random() * 2 - 1;
-            output[i] = (lastOut + (0.02 * white)) / 1.02;
-            lastOut = output[i];
-            output[i] *= 5; // (roughly) compensate for gain
-        }
-        return buffer;
-    }
-
-    playThump() {
-        if (!this.audioContext) return;
-        const source = this.audioContext.createBufferSource();
-        source.buffer = this.brownNoiseBuffer;
-
-        const lowpass = this.audioContext.createBiquadFilter();
-        lowpass.type = 'lowpass';
-        lowpass.frequency.setValueAtTime(100, this.audioContext.currentTime);
-
-        const gainNode = this.audioContext.createGain();
-        gainNode.gain.setValueAtTime(5, this.audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(1, this.audioContext.currentTime + 0.25);
-
-        source.connect(lowpass);
-        lowpass.connect(gainNode);
-        gainNode.connect(this.masterGain);
-
-        source.start();
-        source.stop(this.audioContext.currentTime + 0.3);
-    }
-
-    startRollingSound() {
-        if (this.rollingSound || !this.audioContext) return;
-        this.rollingSound = {};
-        this.rollingSound.source = this.audioContext.createBufferSource();
-        this.rollingSound.source.buffer = this.brownNoiseBuffer;
-        this.rollingSound.source.loop = true;
-
-        this.rollingSound.gain = this.audioContext.createGain();
-        this.rollingSound.gain.gain.setValueAtTime(0, this.audioContext.currentTime);
-        this.rollingSound.gain.gain.linearRampToValueAtTime(0.05, this.audioContext.currentTime + 0.001);
-
-        this.rollingSound.lowpass = this.audioContext.createBiquadFilter();
-        this.rollingSound.lowpass.type = 'lowpass';
-        this.rollingSound.lowpass.frequency.setValueAtTime(200, this.audioContext.currentTime);
-
-        this.rollingSound.source.connect(this.rollingSound.lowpass);
-        this.rollingSound.lowpass.connect(this.rollingSound.gain);
-        this.rollingSound.gain.connect(this.masterGain);
-
-        this.rollingSound.source.start();
-    }
-
-    stopRollingSound() {
-        if (!this.rollingSound) return;
-        this.rollingSound.gain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.2);
-        this.rollingSound.source.stop(this.audioContext.currentTime + 0.2);
-        this.rollingSound = null;
-    }
-
-    setRollRate(rate) {
-        if (!this.rollingSound) return;
-        const clampedRate = Math.max(0.5, Math.min(2.0, rate));
-        this.rollingSound.source.playbackRate.setValueAtTime(clampedRate, this.audioContext.currentTime);
-
-        const newFreq = 200 + (clampedRate - 1) * 100;
-        this.rollingSound.lowpass.frequency.setValueAtTime(newFreq, this.audioContext.currentTime);
-    }
-
-    playPinHit() {
-        if (!this.audioContext) return;
-
-        const now = this.audioContext.currentTime;
-        if (now - this.lastPinHitTime < 0.05) { // 50ms cooldown
-            return;
-        }
-        this.lastPinHitTime = now;
-
-        // Low-frequency component for "body"
-        const brownSource = this.audioContext.createBufferSource();
-        brownSource.buffer = this.brownNoiseBuffer;
-        const brownGain = this.audioContext.createGain();
-        brownGain.gain.setValueAtTime(1, this.audioContext.currentTime);
-        brownGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
-        const brownFilter = this.audioContext.createBiquadFilter();
-        brownFilter.type = 'lowpass';
-        brownFilter.frequency.setValueAtTime(150, this.audioContext.currentTime);
-        brownSource.connect(brownFilter);
-        brownFilter.connect(brownGain);
-        brownGain.connect(this.masterGain);
-
-        // High-frequency component for "crack"
-        const whiteBufferSize = this.audioContext.sampleRate * 0.1;
-        const whiteBuffer = this.audioContext.createBuffer(1, whiteBufferSize, this.audioContext.sampleRate);
-        const whiteOutput = whiteBuffer.getChannelData(0);
-        for (let i = 0; i < whiteBufferSize; i++) {
-            whiteOutput[i] = Math.random() * 2 - 1;
-        }
-        const whiteSource = this.audioContext.createBufferSource();
-        whiteSource.buffer = whiteBuffer;
-        const whiteGain = this.audioContext.createGain();
-        whiteGain.gain.setValueAtTime(0.08, this.audioContext.currentTime);
-        whiteGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.1);
-        const whiteFilter = this.audioContext.createBiquadFilter();
-        whiteFilter.type = 'highpass';
-        whiteFilter.frequency.setValueAtTime(1200, this.audioContext.currentTime);
-        whiteSource.connect(whiteFilter);
-        whiteFilter.connect(whiteGain);
-        whiteGain.connect(this.masterGain);
-
-        brownSource.start();
-        //whiteSource.start();
-    }
-}
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
@@ -174,7 +42,7 @@ let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
-let gameMode = localStorage.getItem('gameMode') || 'freeplay';
+const gameMode = 'freeplay';
 let currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
 let pinsFallenResetTimer = null;
 let rollCompletionTimer = null;
@@ -188,7 +56,6 @@ let selectedMenuIndex = 0;
 let activeMenu = 'main'; // 'main' or 'theme'
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
-let audioManager;
 let scoreboard = null;
 let scoreData = [];
 let currentFrame = 0;
@@ -274,11 +141,9 @@ function createOptionsMenu() {
 
 
     // Main Menu Buttons
-    const freePlayButton = createButton('Free Play', 0.15, 'setGameMode', 'freeplay');
-    const scoringButton = createButton('Scoring', 0.0, 'setGameMode', 'scoring');
-    const themeButton = createButton('Theme', -0.15, 'openThemeMenu');
-    mainMenu.add(freePlayButton, scoringButton, themeButton);
-    mainMenu.userData.buttons.push(freePlayButton, scoringButton, themeButton);
+    const themeButton = createButton('Theme', 0.0, 'openThemeMenu');
+    mainMenu.add(themeButton);
+    mainMenu.userData.buttons.push(themeButton);
 
     // Theme Menu Buttons
     const normalThemeButton = createButton('Normal', 0.1, 'setTheme', 'Normal');
@@ -301,9 +166,7 @@ function createOptionsMenu() {
         activeMenu = 'main';
         mainMenu.visible = true;
         themeMenu.visible = false;
-        // Find index of current game mode and set it as selected
-        const currentModeIndex = mainMenu.userData.buttons.findIndex(button => button.userData.value === gameMode);
-        selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
+        selectedMenuIndex = 0;
         menu.userData.update();
         menu.visible = true;
     };
@@ -314,393 +177,6 @@ function createOptionsMenu() {
     return menu;
 }
 
-function updateGameModeUI() {
-    if (gameMode === 'scoring') {
-        if (scoreboard) {
-            // Position the scoreboard above the lane
-            if (laneObject) {
-                const lanePosition = laneObject.mesh.position;
-                scoreboard.position.set(lanePosition.x, lanePosition.y + 2.0, lanePosition.z - 2);
-            }
-            scoreboard.visible = true;
-            startNewGame();
-        }
-    } else { // 'freeplay'
-        if (scoreboard) {
-            scoreboard.visible = false;
-        }
-    }
-}
-
-function createScoreboard() {
-    const canvas = document.createElement('canvas');
-    canvas.width = 2048; // High res for sharp text
-    canvas.height = 256;
-    const context = canvas.getContext('2d');
-
-    const texture = new THREE.CanvasTexture(canvas);
-    const geometry = new THREE.PlaneGeometry(3.5, 0.42); // A larger, wide banner
-    const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
-
-    const boardMesh = new THREE.Mesh(geometry, material);
-    boardMesh.name = "scoreboard";
-    boardMesh.userData.canvas = canvas;
-    boardMesh.userData.context = context;
-
-    boardMesh.visible = false; // Initially hidden
-    scene.add(boardMesh);
-
-    return boardMesh;
-}
-
-function drawScoreboard() {
-    if (!scoreboard) return;
-
-    const ctx = scoreboard.userData.context;
-    const canvas = scoreboard.userData.canvas;
-
-    // Clear canvas with a dark blue background
-    ctx.fillStyle = '#000033';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    // Define layout constants
-    const frameWidth = (canvas.width - 40) / 11; // 10 frames + 1 total box
-    const frameHeight = canvas.height - 40;
-    const startX = 20;
-    const startY = 20;
-    const smallBoxSize = frameWidth / 3.5;
-
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 3;
-    ctx.fillStyle = 'white';
-
-    // Draw the 10 frames + total box
-    let lastValidScore = '';
-    for (let i = 0; i < 11; i++) {
-        const x = startX + i * frameWidth;
-
-        if (i < 10) { // Frames 1-10
-            // Main frame box
-            ctx.strokeRect(x, startY, frameWidth, frameHeight);
-
-            // Line for frame score
-            ctx.beginPath();
-            ctx.moveTo(x, startY + smallBoxSize);
-            ctx.lineTo(x + frameWidth, startY + smallBoxSize);
-            ctx.stroke();
-
-            // Frame score text
-            const frameScore = scoreData[i].frameScore || '';
-            if (frameScore) {
-                lastValidScore = frameScore;
-            }
-            ctx.font = '60px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(frameScore, x + frameWidth / 2, startY + smallBoxSize + (frameHeight - smallBoxSize) / 2);
-
-            if (i < 9) { // Frames 1-9 have 2 roll boxes
-                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
-                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
-
-                ctx.font = '30px sans-serif';
-                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
-                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
-
-            } else { // 10th Frame has 3 roll boxes
-                ctx.strokeRect(x + frameWidth - 3 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
-                ctx.strokeRect(x + frameWidth - 2 * smallBoxSize, startY, smallBoxSize, smallBoxSize);
-                ctx.strokeRect(x + frameWidth - smallBoxSize, startY, smallBoxSize, smallBoxSize);
-
-                ctx.font = '30px sans-serif';
-                ctx.fillText(scoreData[i].rolls[0], x + frameWidth - (2.5 * smallBoxSize), startY + smallBoxSize / 2);
-                ctx.fillText(scoreData[i].rolls[1], x + frameWidth - (1.5 * smallBoxSize), startY + smallBoxSize / 2);
-                ctx.fillText(scoreData[i].rolls[2], x + frameWidth - (0.5 * smallBoxSize), startY + smallBoxSize / 2);
-            }
-        } else { // Final "Total" box
-            ctx.strokeRect(x, startY, frameWidth, frameHeight);
-            const totalScore = lastValidScore;
-            ctx.font = '60px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(totalScore, x + frameWidth / 2, startY + frameHeight / 2);
-        }
-    }
-
-    scoreboard.material.map.needsUpdate = true;
-}
-
-function startNewGame() {
-    // This is the code for a clean, empty scoreboard.
-    scoreData = [];
-    for (let i = 0; i < 10; i++) {
-        scoreData.push({
-            rolls: i < 9 ? ['', ''] : ['', '', ''],
-            frameScore: ''
-        });
-    }
-    currentFrame = 0;
-    currentRoll = 0;
-    isGameOver = false;
-    pinsDownLastRoll = 0;
-
-    // We need to make sure pins are reset when a new scoring game starts
-    if (world) { // Check if physics world is ready
-        resetPins();
-    }
-
-    drawScoreboard();
-}
-
-function calculateScores() {
-    let cumulativeScore = 0;
-
-    // Helper to get the numeric value of a single roll
-    const getRollValue = (frame, roll) => {
-        const rollStr = scoreData[frame].rolls[roll];
-        if (rollStr === '') return null;
-        if (rollStr === 'X') return 10;
-        // For a spare, its value is 10 minus the previous roll in that frame.
-        if (rollStr === '/') return 10 - parseInt(scoreData[frame].rolls[roll - 1]);
-        return parseInt(rollStr);
-    };
-
-    // --- Frames 1-9 ---
-    for (let i = 0; i < 9; i++) {
-        if (scoreData[i].rolls[0] === '') {
-            scoreData[i].frameScore = '';
-            continue;
-        }
-
-        let frameScore = 0;
-        const isStrike = scoreData[i].rolls[0] === 'X';
-        const isSpare = scoreData[i].rolls[1] === '/';
-
-        if (isStrike) {
-            const nextRoll = getRollValue(i + 1, 0);
-            let secondNextRoll;
-            if (nextRoll === 10) { // Followed by another strike
-                // Look ahead to the frame after that, or the 2nd roll of the 10th frame
-                secondNextRoll = (i < 8) ? getRollValue(i + 2, 0) : getRollValue(9, 1);
-            } else { // Not a double
-                secondNextRoll = getRollValue(i + 1, 1);
-            }
-
-            if (nextRoll === null || secondNextRoll === null) {
-                scoreData[i].frameScore = ''; continue;
-            }
-            frameScore = 10 + nextRoll + secondNextRoll;
-
-        } else if (isSpare) {
-            const nextRoll = getRollValue(i + 1, 0);
-            if (nextRoll === null) {
-                scoreData[i].frameScore = ''; continue;
-            }
-            frameScore = 10 + nextRoll;
-
-        } else { // Open frame
-            const roll1 = getRollValue(i, 0);
-            const roll2 = getRollValue(i, 1);
-            if (roll1 === null || roll2 === null) {
-                scoreData[i].frameScore = ''; continue;
-            }
-            frameScore = roll1 + roll2;
-        }
-
-        cumulativeScore += frameScore;
-        scoreData[i].frameScore = cumulativeScore.toString();
-    }
-
-    // --- Frame 10 ---
-    const frame10 = scoreData[9];
-    if (frame10.rolls[0] !== '') {
-        const roll1Val = getRollValue(9, 0);
-        if (roll1Val === null) {
-            frame10.frameScore = '';
-            return;
-        }
-
-        const roll2Val = getRollValue(9, 1);
-        if (roll2Val === null) {
-            frame10.frameScore = '';
-            return;
-        }
-
-        let frameScore = 0;
-        const isStrike = roll1Val === 10;
-        const isSpare = !isStrike && (roll1Val + roll2Val === 10);
-
-        if (isStrike || isSpare) {
-            const roll3Val = getRollValue(9, 2);
-            if (roll3Val !== null) {
-                frameScore = roll1Val + roll2Val + roll3Val;
-                cumulativeScore += frameScore;
-                frame10.frameScore = cumulativeScore.toString();
-            } else {
-                frame10.frameScore = ''; // Waiting for third roll
-            }
-        } else {
-            // Open 10th frame, no third roll
-            frameScore = roll1Val + roll2Val;
-            cumulativeScore += frameScore;
-            frame10.frameScore = cumulativeScore.toString();
-        }
-    } else {
-        frame10.frameScore = '';
-    }
-}
-
-function processStandardFrameRoll(fallenPins, fallenThisRoll) {
-    if (currentRoll === 0) { // First roll
-        if (fallenPins.length === 10) { // Strike
-            scoreData[currentFrame].rolls[0] = 'X';
-            currentFrame++;
-            pinsDownLastRoll = 0;
-            currentRoll = 0; // Signals a new frame
-        } else {
-            scoreData[currentFrame].rolls[0] = fallenThisRoll.toString();
-            pinsDownLastRoll = fallenPins.length;
-            currentRoll++;
-        }
-    } else { // Second roll
-        if (fallenPins.length === 10) { // Spare
-            scoreData[currentFrame].rolls[1] = '/';
-        } else {
-            scoreData[currentFrame].rolls[1] = fallenThisRoll.toString();
-        }
-        currentFrame++;
-        currentRoll = 0;
-        pinsDownLastRoll = 0;
-    }
-}
-
-function processTenthFrameRoll(fallenPins, fallenThisRoll) {
-    const frame = scoreData[9];
-
-    if (currentRoll === 0) { // First roll
-        frame.rolls[0] = fallenThisRoll === 10 ? 'X' : fallenThisRoll.toString();
-        pinsDownLastRoll = fallenPins.length;
-        currentRoll++;
-    } else if (currentRoll === 1) { // Second roll
-        const firstRollWasStrike = frame.rolls[0] === 'X';
-
-        if (firstRollWasStrike) {
-            const pinsThisThrow = fallenPins.length;
-            frame.rolls[1] = pinsThisThrow === 10 ? 'X' : pinsThisThrow.toString();
-            pinsDownLastRoll = fallenPins.length;
-        } else {
-            if (fallenPins.length === 10) { // Spare
-                frame.rolls[1] = '/';
-            } else { // Open frame
-                frame.rolls[1] = fallenThisRoll.toString();
-                isGameOver = true; // Game over, no third roll
-            }
-            pinsDownLastRoll = fallenPins.length;
-        }
-
-        if (!isGameOver) {
-            currentRoll++;
-        }
-    } else if (currentRoll === 2) { // Third roll (bonus ball)
-        const firstRollWasStrike = frame.rolls[0] === 'X';
-        const secondRollWasStrike = frame.rolls[1] === 'X';
-
-        if (firstRollWasStrike && secondRollWasStrike) {
-            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
-        } else if (firstRollWasStrike) {
-            frame.rolls[2] = fallenPins.length === 10 ? '/' : fallenThisRoll.toString();
-        } else { // Spare on second roll
-            frame.rolls[2] = fallenPins.length === 10 ? 'X' : fallenPins.length.toString();
-        }
-        isGameOver = true;
-    }
-}
-
-function endTurn() {
-    processRoll(); // This updates currentFrame, currentRoll, and scoreData
-
-    if (isGameOver) {
-        return; // Game is over, do nothing.
-    }
-
-    let fullPinReset = false;
-
-    // Condition 1: A new frame is starting for frames 1-9.
-    // This is indicated by currentRoll being 0 after processRoll has run.
-    if (currentFrame < 9 && currentRoll === 0) {
-        fullPinReset = true;
-    }
-
-    // Condition 2: Handling the 10th frame logic.
-    if (currentFrame === 9) {
-        const frame10 = scoreData[9];
-        const firstRollWasStrike = frame10.rolls[0] === 'X';
-        const isSpareOnSecond = frame10.rolls[1] === '/';
-
-        // Reset for the 2nd ball if the 1st was a strike.
-        if (currentRoll === 1 && firstRollWasStrike) {
-            fullPinReset = true;
-        }
-        // Reset for the 3rd ball if it was earned via a strike or spare.
-        else if (currentRoll === 2 && (firstRollWasStrike || isSpareOnSecond)) {
-            fullPinReset = true;
-        }
-    }
-
-    // This handles the transition from frame 9 to 10. If the 9th frame was a strike,
-    // currentRoll becomes 0 and currentFrame becomes 9. The next roll is the first
-    // in the 10th, which needs a full rack.
-    if (currentFrame === 9 && currentRoll === 0) {
-        fullPinReset = true;
-    }
-
-
-    if (fullPinReset) {
-        resetPins();
-    } else {
-        // This case only happens on the 2nd roll of an open frame (including the 10th).
-        const fallenPins = getFallenPins();
-        for (const pin of fallenPins) {
-            pin.mesh.visible = false;
-        }
-        resetBall();
-    }
-}
-
-function processRoll() {
-    if (isGameOver) return;
-
-    // First, update the fallen state of all pins based on the new logic
-    const pins = dynamicObjects.filter(obj => obj.isPin);
-    for (const pin of pins) {
-        getPinContacts(pin); // This function now updates the pin's isFallen property
-    }
-
-    // Now, get the list of pins that are marked as fallen
-    const fallenPins = getFallenPins();
-    const fallenThisRoll = Math.max(0, fallenPins.length - pinsDownLastRoll);
-
-    if (currentFrame === 9) {
-        processTenthFrameRoll(fallenPins, fallenThisRoll);
-    } else {
-        processStandardFrameRoll(fallenPins, fallenThisRoll);
-    }
-
-    calculateScores();
-    drawScoreboard();
-
-    if (isGameOver) {
-        activeConfirmationDialog = createConfirmationDialog(
-            'Game Over! Play Again?',
-            [
-                { text: 'No', action: 'dismiss' },
-                { text: 'Yes', action: 'startNewGame' }
-            ],
-            renderer
-        );
-        scene.add(activeConfirmationDialog);
-    }
-}
 
 function createPinHUD() {
     const canvas = document.createElement('canvas');
@@ -834,7 +310,6 @@ async function main() {
         sceneSetupInitiated = true;
         fY_floor = 0; // Assume flat ground for testing
         await placeScene(fY_floor, loader, world, dynamicObjects);
-        updateGameModeUI();
         // Expose functions for Playwright testing
         window.createConfirmationDialog = createConfirmationDialog;
         window.renderer = renderer;
@@ -850,16 +325,7 @@ async function main() {
         });
         document.body.appendChild(arButton);
 
-        arButton.addEventListener('click', () => {
-            if (audioManager && audioManager.audioContext.state === 'suspended') {
-                audioManager.audioContext.resume();
-            }
-        });
-
         renderer.xr.addEventListener('sessionstart', () => {
-            if (audioManager && audioManager.audioContext.state === 'suspended') {
-                audioManager.audioContext.resume();
-            }
             // Scene setup is handled in the animate loop for AR
         });
         renderer.xr.addEventListener('sessionend', cleanupScene);
@@ -957,16 +423,10 @@ function animate(timestamp, frame) {
             // Ball-Pin collision
             if ((isBall1 && isPin2) || (isBall2 && isPin1)) {
                 const pin = isPin1 ? obj1 : obj2;
-                if (audioManager && !pin.isFallen) {
-                    audioManager.playPinHit();
-                }
             }
 
             // Ball-Lane collision
             if ((isBall1 && isLane2) || (isBall2 && isLane1)) {
-                if (audioManager) {
-                    audioManager.playThump();
-                }
             }
         });
     }
@@ -1011,28 +471,6 @@ function animate(timestamp, frame) {
 
 
     renderer.render(scene, camera);
-
-    // --- AUDIO HANDLING ---
-    if (audioManager) {
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        if (ball && !holdingController) {
-            const ballContacts = getBallContacts();
-            const isOnLane = ballContacts.includes('lane');
-            const isInGutter = ballContacts.includes('gutter');
-            const linvel = ball.body.linvel();
-            const speed = new THREE.Vector3(linvel.x, linvel.y, linvel.z).length();
-
-            if ((isOnLane || isInGutter) && speed > 0.2) {
-                audioManager.startRollingSound();
-                const rate = 0.5 + Math.min(speed / 8, 1.5);
-                audioManager.setRollRate(rate);
-            } else {
-                audioManager.stopRollingSound();
-            }
-        } else if (audioManager) {
-            audioManager.stopRollingSound();
-        }
-    }
     if (pinHUD && pinHUD.visible) {
         // Update pin states in real-time for the HUD before drawing it
         const pins = dynamicObjects.filter(obj => obj.isPin);
@@ -1049,58 +487,10 @@ function animate(timestamp, frame) {
 
             if (fallenPins.length === pins.length && !allPinsFallen) {
                 allPinsFallen = true;
-                // In scoring mode, roll completion handles reset. In freeplay, use a timer.
-                if (gameMode === 'freeplay') {
-                    pinsFallenResetTimer = setTimeout(() => {
-                        resetPins();
-                        pinsFallenResetTimer = null;
-                    }, 3000);
-                }
-            }
-        }
-
-        // --- SCORING LOGIC: Roll Completion Detection ---
-        const ball = dynamicObjects.find(obj => obj.isBall);
-        const ballContacts = getBallContacts();
-        if (ball && gameMode === 'scoring' && !isGameOver) {
-         //console.log(ball.mesh.position.z);
-         //console.log(ball.mesh.position.z<-0.850);
-         //console.log(ballHasTouchedLane);
-          if (ballContacts.includes('ground') && !rollCompletionTimer) {
-           if (!ballHasTouchedLane) {
-            isBallThrown = false; // Reset the throw state.
-            // And we do nothing else, as requested. The turn does not proceed.
-           } 
-          }
-        }
-        if (gameMode === 'scoring' && isBallThrown && !isGameOver) {
-
-            if (ball) {
-                const isSleeping = ball.body.isSleeping();
-                //const ballLocation = getBallLocationState(); //old method
-                //const isOutOfPlay = ballLocation === 'gutter' || ballLocation === 'ground';
-               
-                const isOutOfPlay = ballContacts.includes('gutter') || ballContacts.includes('ground');
-
-
-                // If the ball has stopped or is out of play, and a timer isn't already running...
-                if ((isSleeping || isOutOfPlay) && !rollCompletionTimer) {
-
-                       // NEW LOGIC: If the ball is on the ground but never touched the lane, it's an invalid roll.
-
-    // EXISTING LOGIC: If it was a valid roll (hit the gutter or touched the lane), end the turn.
-    if (ballContacts.includes('gutter') || ballHasTouchedLane) {
-                        // isBallThrown is intentionally kept true here.
-                        // It will be reset inside endTurn() -> resetBall() after the timer.
-                        rollCompletionTimer = setTimeout(() => {
-                            endTurn();
-                            rollCompletionTimer = null;
-                        }, 5000); // 5-second timer
-    } else {
-                     console.log("doesn't happen?");
-                     isBallThrown = false;
-    }
-                }
+                pinsFallenResetTimer = setTimeout(() => {
+                    resetPins();
+                    pinsFallenResetTimer = null;
+                }, 3000);
             }
         }
 
@@ -1173,10 +563,6 @@ function animate(timestamp, frame) {
                                     resetPins();
                                     activeConfirmationDialog.userData.dismiss();
                                     break;
-                                case 'startNewGame':
-                                    startNewGame();
-                                    activeConfirmationDialog.userData.dismiss();
-                                    break;
                             }
                         }
 
@@ -1216,12 +602,6 @@ function animate(timestamp, frame) {
                             if (selectedButton) {
                                 const { action, value } = selectedButton.userData;
                                 switch (action) {
-                                    case 'setGameMode':
-                                        gameMode = value;
-                                        localStorage.setItem('gameMode', gameMode);
-                                        optionsMenu.visible = false;
-                                        updateGameModeUI();
-                                        break;
                                     case 'openThemeMenu':
                                         activeMenu = 'theme';
                                         optionsMenu.getObjectByName('mainMenu').visible = false;
@@ -1320,20 +700,7 @@ function animate(timestamp, frame) {
                     // Handle A/X button (index 4) for initiating a reset
                     if (controller.gamepad.buttons[4].pressed && !resetButtonState[i]) {
                         resetButtonState[i] = true;
-
-                        if (gameMode === 'scoring') {
-                            activeConfirmationDialog = createConfirmationDialog(
-                                'Reset the game?',
-                                [
-                                    { text: 'No', action: 'dismiss' },
-                                    { text: 'Yes', action: 'startNewGame' }
-                                ],
-                                renderer
-                            );
-                            scene.add(activeConfirmationDialog);
-                        } else { // freeplay mode
-                            resetPins();
-                        }
+                        resetPins();
 
                     } else if (!controller.gamepad.buttons[4].pressed) {
                         resetButtonState[i] = false;
@@ -1965,9 +1332,6 @@ function createConfirmationDialog(title, buttons, renderer) {
     if (laneObject) {
         const lanePosition = laneObject.mesh.position;
         dialog.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 1);
-        if (scoreboard) {
-            dialog.quaternion.copy(scoreboard.quaternion);
-        }
     } else {
         // Fallback position if the lane doesn't exist yet
         dialog.position.set(0, 1.5, -2);
@@ -2085,9 +1449,6 @@ function updateFloorAndLanePosition(yDelta = 0) {
         setLanePosition(newPos);
 
         // Also update scoreboard and pin HUD positions if they are visible
-        if (scoreboard && scoreboard.visible) {
-            scoreboard.position.set(newPos.x, newPos.y + 2.0, newPos.z - 2);
-        }
         if (pinHUD && pinHUD.visible) {
             pinHUD.position.set(newPos.x, newPos.y + 1.5, newPos.z - 3);
         }
@@ -2127,9 +1488,6 @@ function setLanePosition(position) {
 }
 
 function cleanupScene() {
-    if (audioManager) {
-        audioManager.stopRollingSound();
-    }
     // Dismiss any active UI
     if (activeConfirmationDialog) {
         activeConfirmationDialog.userData.dismiss();
@@ -2175,7 +1533,6 @@ function cleanupScene() {
 }
 
 async function init() {
-    audioManager = new AudioManager();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 2, 5); // Move camera up and back
     camera.lookAt(0, 0, 0);
@@ -2188,7 +1545,6 @@ async function init() {
     scene.add(directionalLight);
 
     optionsMenu = createOptionsMenu();
-    scoreboard = createScoreboard();
     pinHUD = createPinHUD();
     if (showButtons) {
         debugDisplay = createDebugDisplay();
@@ -2259,9 +1615,6 @@ function onSelectStart(event) {
                     clearFallenPins();
                 }
 
-                if (audioManager) {
-                    audioManager.stopRollingSound();
-                }
                 // Set the collision group immediately to prevent collision on the next physics step.
                 ball.collider.setCollisionGroups(HELD_BALL_COLLISION_GROUP);
                 // Register the intent to hold, which will be processed in the animate loop after the next physics step.
