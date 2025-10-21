@@ -166,14 +166,14 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight;
+let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
-var gameMode = localStorage.getItem('gameMode') || 'freeplay';
-var currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
+let gameMode = localStorage.getItem('gameMode') || 'freeplay';
+let currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
 let pinsFallenResetTimer = null;
 let rollCompletionTimer = null;
 let allPinsFallen = false;
@@ -182,8 +182,8 @@ let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = [false, false];
-var selectedMenuIndex = 0;
-var activeMenu = 'main'; // 'main' or 'theme'
+let selectedMenuIndex = 0;
+let activeMenu = 'main'; // 'main' or 'theme'
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let audioManager;
@@ -839,9 +839,6 @@ async function main() {
         window.scene = scene;
         window.getBallContacts = getBallContacts;
         window.optionsMenu = optionsMenu;
-        window.currentTheme = currentTheme;
-        window.selectedMenuIndex = selectedMenuIndex;
-        window.activeMenu = activeMenu;
         window.applyTheme = applyTheme;
         window.testModeReady = true; // Signal that the test environment is ready
     } else {
@@ -1435,6 +1432,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
             if (child.name === 'lane') {
+                if (child.isMesh && child.material && child.material.map) {
+                    originalLaneTexture = child.material.map;
+                }
               //child.visible = false;
                 // Create a box collider for the lane for more reliable physics
                 const boundingBox = new THREE.Box3().setFromObject(child);
@@ -1964,7 +1964,20 @@ function createConfirmationDialog(title, buttons, renderer) {
 }
 
 async function applyTheme(theme) {
+    const laneMesh = laneObject.mesh.getObjectByName('lane');
+
     if (theme === 'Halloween') {
+        // Apply blood texture to the lane
+        if (laneMesh && laneMesh.isMesh && laneMesh.material) {
+            const textureLoader = new THREE.TextureLoader();
+            const bloodTexture = textureLoader.load('3d/blood.jpg');
+            bloodTexture.wrapS = THREE.RepeatWrapping;
+            bloodTexture.wrapT = THREE.RepeatWrapping;
+            bloodTexture.repeat.set(20, 2);
+            laneMesh.material.map = bloodTexture;
+            laneMesh.material.needsUpdate = true;
+        }
+
         if (!boneModel) { // Load only if not already loaded
             try {
                 const boneGltf = await loader.loadAsync('3d/bone.glb');
@@ -1990,6 +2003,12 @@ async function applyTheme(theme) {
             } catch (error) {
                 console.error("Failed to load or process bone.glb:", error);
             }
+        }
+    } else {
+        // Revert to the original lane texture for "Normal" theme
+        if (laneMesh && laneMesh.isMesh && laneMesh.material) {
+            laneMesh.material.map = originalLaneTexture;
+            laneMesh.material.needsUpdate = true;
         }
     }
     // In 'Normal' mode, we don't need to do anything extra as pinModel is the default.
@@ -2035,7 +2054,6 @@ async function applyTheme(theme) {
         }
     }
 }
-
 
 function updateFloorAndLanePosition(yDelta = 0) {
     if (laneObject) {
