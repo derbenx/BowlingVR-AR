@@ -166,7 +166,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, boneModel, pinVertices, fY_floor, pinHeight;
+let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1390,13 +1390,32 @@ function animate(timestamp, frame) {
 }
 
 async function placeScene(fY, loader, world, dynamicObjects) {
-    // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/bowling.glb');
+    // Load Models
+    const [laneGltf, skullGltf] = await Promise.all([
+        loader.loadAsync('3d/bowling.glb'),
+        loader.loadAsync('3d/skull.glb')
+    ]);
 
-        // Visual ground and Physics Ground
-        const groundMesh = laneGltf.scene;
+    // Process Skull model for the ball
+    const loadedSkullMesh = skullGltf.scene.getObjectByProperty('type', 'Mesh');
+    if (loadedSkullMesh) {
+        const correctedGeometry = loadedSkullMesh.geometry.clone();
+        const parentMatrix = loadedSkullMesh.parent ? loadedSkullMesh.parent.matrixWorld : new THREE.Matrix4();
+        correctedGeometry.applyMatrix4(parentMatrix);
+        correctedGeometry.applyMatrix4(loadedSkullMesh.matrix);
+        correctedGeometry.computeBoundingBox();
+        const trueCenter = new THREE.Vector3();
+        correctedGeometry.boundingBox.getCenter(trueCenter);
+        correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+        skullBallModel = new THREE.Mesh(correctedGeometry, loadedSkullMesh.material.clone());
+    } else {
+        console.error("No mesh found in skull.glb for the ball");
+    }
 
-        // Create a fixed rigid body for the lane at the origin.
+    // Visual ground and Physics Ground
+    const groundMesh = laneGltf.scene;
+
+    // Create a fixed rigid body for the lane at the origin.
         // We will set its final position after creating all components.
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
         const laneBody = world.createRigidBody(laneBodyDesc);
@@ -1479,6 +1498,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                     laneCollisionVisualizer.add(visualizerMesh);
                 }
             } else if (child.name === 'ball') {
+                ballModel = child; // Store the original ball model
                 ballMesh = child;
             } else if (child.name === 'pin') {
                 pinModel = child;
@@ -1513,22 +1533,28 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     await applyTheme(currentTheme);
 
     // Create Bowling Ball
-    // The ball is now loaded from the bowling.glb file.
-    // We need to remove it from its original parent to treat it as a separate dynamic object.
-    if (ballMesh && ballMesh.parent) {
-        ballMesh.parent.remove(ballMesh);
+    // Physics are derived from the original ball model
+    if (ballModel && ballModel.parent) {
+        ballModel.parent.remove(ballModel);
     }
-    const ballBox = new THREE.Box3().setFromObject(ballMesh);
-
-    // Center the geometry
-    const center = ballBox.getCenter(new THREE.Vector3());
-    //if (ballMesh.isMesh) {
-        //ballMesh.geometry.translate(-center.x, -center.y, -center.z);
-    //}
-    ballBox.setFromObject(ballMesh); // Recalculate the box after centering
-
+    const ballBox = new THREE.Box3().setFromObject(ballModel);
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
+
+    // Determine which mesh to use based on the theme
+    let displayMesh;
+    if (currentTheme === 'Halloween' && skullBallModel) {
+        displayMesh = skullBallModel.clone();
+        // Scale the skull to be a similar size to the ball
+        const skullBox = new THREE.Box3().setFromObject(displayMesh);
+        const skullSize = skullBox.getSize(new THREE.Vector3());
+        if (skullSize.x > 0) {
+            const scale = ballSize.x / skullSize.x;
+            displayMesh.scale.set(scale, scale, scale);
+        }
+    } else {
+        displayMesh = ballModel.clone();
+    }
 
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -1 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
@@ -1537,11 +1563,11 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballColliderDesc.userData = { name: 'ball' };
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    const ballObject = { mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true, name: 'ball' };
+    const ballObject = { mesh: displayMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true, name: 'ball' };
     dynamicObjects.push(ballObject);
     colliderToObjectMap.set(ballCollider.handle, ballObject);
-    scene.add(ballMesh);
-    ballMesh.visible = true;
+    scene.add(displayMesh);
+    displayMesh.visible = true;
 
     // Create Bowling Pins
      //const pinGltf = await loader.loadAsync('3d/pin.glb');
@@ -1968,13 +1994,13 @@ async function applyTheme(theme) {
     }
     // In 'Normal' mode, we don't need to do anything extra as pinModel is the default.
 
-    // If the game world exists, refresh the pins to apply the theme.
+    // If the game world exists, refresh the pins and ball to apply the theme.
     if (world) {
+        // Refresh Pins
         const pinsToRemove = dynamicObjects.filter(obj => obj.isPin);
         if (pinsToRemove.length > 0) {
             for (const pin of pinsToRemove) {
-                // Make sure to remove from the map as well
-                if(colliderToObjectMap.has(pin.collider.handle)) {
+                if (colliderToObjectMap.has(pin.collider.handle)) {
                     colliderToObjectMap.delete(pin.collider.handle);
                 }
                 scene.remove(pin.mesh);
@@ -1982,6 +2008,30 @@ async function applyTheme(theme) {
             }
             dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
             createPins(fY_floor + floorOffset);
+        }
+
+        // Refresh Ball
+        const ballObject = dynamicObjects.find(obj => obj.isBall);
+        if (ballObject) {
+            scene.remove(ballObject.mesh); // Remove old mesh
+
+            let newMesh;
+            if (theme === 'Halloween' && skullBallModel) {
+                newMesh = skullBallModel.clone();
+                const ballBox = new THREE.Box3().setFromObject(ballModel);
+                const ballSize = ballBox.getSize(new THREE.Vector3());
+                const skullBox = new THREE.Box3().setFromObject(newMesh);
+                const skullSize = skullBox.getSize(new THREE.Vector3());
+                if (skullSize.x > 0) {
+                    const scale = ballSize.x / skullSize.x;
+                    newMesh.scale.set(scale, scale, scale);
+                }
+            } else {
+                newMesh = ballModel.clone();
+            }
+
+            ballObject.mesh = newMesh;
+            scene.add(newMesh);
         }
     }
 }
