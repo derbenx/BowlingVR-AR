@@ -1629,7 +1629,7 @@ function createPins(fY) {
         pinMesh.visible = true;
     }
 
-    const pinSpacing = 0.2;
+    const pinSpacing = 0.155;
     const pinStartZ = -7; //where pins are located!
     
     for (let row = 0; row < 4; row++) {
