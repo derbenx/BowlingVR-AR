@@ -166,14 +166,14 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor, pinHeight;
+let pinModel, boneModel, pinVertices, fY_floor, pinHeight;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
-let gameMode = localStorage.getItem('gameMode') || 'freeplay';
-let currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
+var gameMode = localStorage.getItem('gameMode') || 'freeplay';
+var currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
 let pinsFallenResetTimer = null;
 let rollCompletionTimer = null;
 let allPinsFallen = false;
@@ -182,8 +182,8 @@ let floorOffsetSaveTimer = null;
 let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = [false, false];
-let selectedMenuIndex = 0;
-let activeMenu = 'main'; // 'main' or 'theme'
+var selectedMenuIndex = 0;
+var activeMenu = 'main'; // 'main' or 'theme'
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let audioManager;
@@ -839,6 +839,10 @@ async function main() {
         window.scene = scene;
         window.getBallContacts = getBallContacts;
         window.optionsMenu = optionsMenu;
+        window.currentTheme = currentTheme;
+        window.selectedMenuIndex = selectedMenuIndex;
+        window.activeMenu = activeMenu;
+        window.applyTheme = applyTheme;
         window.testModeReady = true; // Signal that the test environment is ready
     } else {
         // Standard AR mode initialization
@@ -1224,7 +1228,7 @@ function animate(timestamp, frame) {
                                     case 'setTheme':
                                         currentTheme = value;
                                         localStorage.setItem('bowlingTheme', currentTheme);
-                                        // applyTheme(currentTheme); // This function will be implemented later
+                                        applyTheme(currentTheme);
                                         activeMenu = 'main';
                                         optionsMenu.getObjectByName('themeMenu').visible = false;
                                         optionsMenu.getObjectByName('mainMenu').visible = true;
@@ -1505,6 +1509,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
 
+    // Apply the current theme
+    await applyTheme(currentTheme);
+
     // Create Bowling Ball
     // The ball is now loaded from the bowling.glb file.
     // We need to remove it from its original parent to treat it as a separate dynamic object.
@@ -1655,7 +1662,12 @@ function createPins(fY) {
     let pinIdCounter = 0;
 
     function createPin(x, z, id) {
-        const pinMesh = pinModel.clone();
+        let pinMesh;
+        if (currentTheme === 'Halloween' && boneModel) {
+            pinMesh = boneModel.clone();
+        } else {
+            pinMesh = pinModel.clone();
+        }
         // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
         const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
@@ -1924,6 +1936,56 @@ function createConfirmationDialog(title, buttons, renderer) {
 
     return dialog;
 }
+
+async function applyTheme(theme) {
+    if (theme === 'Halloween') {
+        if (!boneModel) { // Load only if not already loaded
+            try {
+                const boneGltf = await loader.loadAsync('3d/bone.glb');
+                const loadedMesh = boneGltf.scene.getObjectByProperty('type', 'Mesh');
+                if (loadedMesh) {
+                    // Pre-process the bone model geometry similar to the pin model
+                    const correctedGeometry = loadedMesh.geometry.clone();
+
+                    // It's better to apply the parent's matrix if the mesh isn't at the scene root
+                    const parentMatrix = loadedMesh.parent ? loadedMesh.parent.matrixWorld : new THREE.Matrix4();
+                    correctedGeometry.applyMatrix4(parentMatrix);
+                    correctedGeometry.applyMatrix4(loadedMesh.matrix);
+
+                    correctedGeometry.computeBoundingBox();
+                    const trueCenter = new THREE.Vector3();
+                    correctedGeometry.boundingBox.getCenter(trueCenter);
+                    correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+
+                    boneModel = new THREE.Mesh(correctedGeometry, loadedMesh.material.clone());
+                } else {
+                    console.error("No mesh found in bone.glb");
+                }
+            } catch (error) {
+                console.error("Failed to load or process bone.glb:", error);
+            }
+        }
+    }
+    // In 'Normal' mode, we don't need to do anything extra as pinModel is the default.
+
+    // If the game world exists, refresh the pins to apply the theme.
+    if (world) {
+        const pinsToRemove = dynamicObjects.filter(obj => obj.isPin);
+        if (pinsToRemove.length > 0) {
+            for (const pin of pinsToRemove) {
+                // Make sure to remove from the map as well
+                if(colliderToObjectMap.has(pin.collider.handle)) {
+                    colliderToObjectMap.delete(pin.collider.handle);
+                }
+                scene.remove(pin.mesh);
+                world.removeRigidBody(pin.body);
+            }
+            dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
+            createPins(fY_floor + floorOffset);
+        }
+    }
+}
+
 
 function updateFloorAndLanePosition(yDelta = 0) {
     if (laneObject) {
