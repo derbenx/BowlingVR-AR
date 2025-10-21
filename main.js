@@ -158,6 +158,8 @@ const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GRO
 // Floor collides with the Ball ands pins
 const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 
+const correctiveRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
@@ -986,7 +988,10 @@ function animate(timestamp, frame) {
         if (ball) {
             const controllerGrip = renderer.xr.getControllerGrip(holdingController.userData.controllerId);
             ball.body.setNextKinematicTranslation(controllerGrip.position);
-            ball.body.setNextKinematicRotation(controllerGrip.quaternion);
+            //ball.body.setNextKinematicRotation(controllerGrip.quaternion);
+            const combinedRotation = new THREE.Quaternion().copy(controllerGrip.quaternion);
+            combinedRotation.multiply(correctiveRotation);
+            ball.body.setNextKinematicRotation(combinedRotation);
         }
     }
 
@@ -1049,7 +1054,7 @@ function animate(timestamp, frame) {
                     pinsFallenResetTimer = setTimeout(() => {
                         resetPins();
                         pinsFallenResetTimer = null;
-                    }, 5000);
+                    }, 3000);
                 }
             }
         }
@@ -1723,7 +1728,7 @@ function createPins(fY) {
         pinMesh.visible = true;
     }
 
-    const pinSpacing = 0.155;
+    const pinSpacing = 0.16;
     const pinStartZ = -7; //where pins are located!
     
     for (let row = 0; row < 4; row++) {
@@ -1778,6 +1783,8 @@ function resetBall() {
         const initialPos = ball.initialPosition;
         const resetY = fY_floor + floorOffset + (initialPos.y - fY_floor);
         ball.body.setTranslation({ x: initialPos.x, y: resetY, z: initialPos.z }, true);
+        
+        ball.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
 
         // Reset velocities
         ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -1973,10 +1980,10 @@ async function applyTheme(theme) {
     if (theme === 'Halloween') {
         // Apply blood texture to the lane and gutter
         const textureLoader = new THREE.TextureLoader();
-        const bloodTexture = textureLoader.load('3d/blood.jpg');
+        const bloodTexture = textureLoader.load('3d/blood.png');
         bloodTexture.wrapS = THREE.RepeatWrapping;
         bloodTexture.wrapT = THREE.RepeatWrapping;
-        bloodTexture.repeat.set(20, 2); // Tile the texture
+        //bloodTexture.repeat.set(20, 2); // Tile the texture
 
         if (laneMesh && laneMesh.isMesh && laneMesh.material) {
             laneMesh.material.map = bloodTexture;
