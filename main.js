@@ -1117,7 +1117,10 @@ function animate(timestamp, frame) {
             const currentQuaternion = controller.quaternion.clone();
             const deltaQuaternion = currentQuaternion.clone().multiply(controller.userData.lastQuaternion.clone().invert());
 
-            let angle = 2 * Math.acos(deltaQuaternion.w);
+            // Clamp the value to prevent Math.acos from returning NaN
+            const clampedW = Math.max(-1, Math.min(1, deltaQuaternion.w));
+            let angle = 2 * Math.acos(clampedW);
+
             if (angle > Math.PI) {
                 angle -= 2 * Math.PI;
             }
