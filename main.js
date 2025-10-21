@@ -166,7 +166,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture;
+let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture, originalGutterTexture;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -1464,6 +1464,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 }
 
             } else if (child.name === 'gutter') {
+                if (child.isMesh && child.material && child.material.map) {
+                    originalGutterTexture = child.material.map;
+                }
                 // Create a trimesh collider for the gutter to match its complex shape
                 const originalVertices = child.geometry.attributes.position.array;
                 const transformedVertices = new Float32Array(originalVertices.length);
@@ -1965,17 +1968,23 @@ function createConfirmationDialog(title, buttons, renderer) {
 
 async function applyTheme(theme) {
     const laneMesh = laneObject.mesh.getObjectByName('lane');
+    const gutterMesh = laneObject.mesh.getObjectByName('gutter');
 
     if (theme === 'Halloween') {
-        // Apply blood texture to the lane
+        // Apply blood texture to the lane and gutter
+        const textureLoader = new THREE.TextureLoader();
+        const bloodTexture = textureLoader.load('3d/blood.jpg');
+        bloodTexture.wrapS = THREE.RepeatWrapping;
+        bloodTexture.wrapT = THREE.RepeatWrapping;
+        bloodTexture.repeat.set(20, 2); // Tile the texture
+
         if (laneMesh && laneMesh.isMesh && laneMesh.material) {
-            const textureLoader = new THREE.TextureLoader();
-            const bloodTexture = textureLoader.load('3d/blood.jpg');
-            bloodTexture.wrapS = THREE.RepeatWrapping;
-            bloodTexture.wrapT = THREE.RepeatWrapping;
-            bloodTexture.repeat.set(20, 2);
             laneMesh.material.map = bloodTexture;
             laneMesh.material.needsUpdate = true;
+        }
+        if (gutterMesh && gutterMesh.isMesh && gutterMesh.material) {
+            gutterMesh.material.map = bloodTexture;
+            gutterMesh.material.needsUpdate = true;
         }
 
         if (!boneModel) { // Load only if not already loaded
@@ -2005,10 +2014,14 @@ async function applyTheme(theme) {
             }
         }
     } else {
-        // Revert to the original lane texture for "Normal" theme
+        // Revert to the original textures for "Normal" theme
         if (laneMesh && laneMesh.isMesh && laneMesh.material) {
             laneMesh.material.map = originalLaneTexture;
             laneMesh.material.needsUpdate = true;
+        }
+        if (gutterMesh && gutterMesh.isMesh && gutterMesh.material) {
+            gutterMesh.material.map = originalGutterTexture;
+            gutterMesh.material.needsUpdate = true;
         }
     }
     // In 'Normal' mode, we don't need to do anything extra as pinModel is the default.
