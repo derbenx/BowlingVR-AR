@@ -168,7 +168,7 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture, originalGutterTexture;
+let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture, originalGutterTexture, bowlingGltf, boneGltf, skullGltf;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
@@ -826,6 +826,11 @@ async function main() {
 
     await init();
 
+    await preloadAssets();
+
+    // Initial preview of the bowling alley
+    scene.add(bowlingGltf.scene);
+
     const urlParams = new URLSearchParams(window.location.search);
     const isTestMode = urlParams.has('test');
 
@@ -833,7 +838,7 @@ async function main() {
         // In test mode, bypass AR and set up the scene directly
         sceneSetupInitiated = true;
         fY_floor = 0; // Assume flat ground for testing
-        await placeScene(fY_floor, loader, world, dynamicObjects);
+        await placeScene(fY_floor, world, dynamicObjects);
         updateGameModeUI();
         // Expose functions for Playwright testing
         window.createConfirmationDialog = createConfirmationDialog;
@@ -894,7 +899,7 @@ function animate(timestamp, frame) {
             fY_floor = fY;
 
             (async () => {
-                await placeScene(fY, loader, world, dynamicObjects);
+                await placeScene(fY, world, dynamicObjects);
                 updateGameModeUI();
 
                 if (showButtons && debugDisplay) {
@@ -1394,13 +1399,15 @@ function animate(timestamp, frame) {
     }
 }
 
-async function placeScene(fY, loader, world, dynamicObjects) {
-    // Load Models
-    const [laneGltf, skullGltf] = await Promise.all([
+async function preloadAssets() {
+    [bowlingGltf, boneGltf, skullGltf] = await Promise.all([
         loader.loadAsync('3d/bowling.glb'),
+        loader.loadAsync('3d/bone.glb'),
         loader.loadAsync('3d/skull.glb')
     ]);
+}
 
+async function placeScene(fY, world, dynamicObjects) {
     // Process Skull model for the ball
     const loadedSkullMesh = skullGltf.scene.getObjectByProperty('type', 'Mesh');
     if (loadedSkullMesh) {
@@ -1418,7 +1425,8 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     }
 
     // Visual ground and Physics Ground
-    const groundMesh = laneGltf.scene;
+    scene.remove(bowlingGltf.scene); // Remove preview model
+    const groundMesh = bowlingGltf.scene;
 
     // Create a fixed rigid body for the lane at the origin.
         // We will set its final position after creating all components.
