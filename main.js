@@ -158,6 +158,8 @@ const PINS_COLLISION_GROUP = (GROUP_PINS << 16) | (GROUP_BALL | GROUP_PINS | GRO
 // Floor collides with the Ball ands pins
 const FLOOR_COLLISION_GROUP = (GROUP_FLOOR << 16) | (GROUP_BALL| GROUP_PINS);
 
+const correctiveRotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 const scene = new THREE.Scene();
 const gravity = { x: 0.0, y: -9.81 , z: 0.0 };
@@ -166,13 +168,14 @@ let dynamicObjects = [];
 let holdingController = null;
 let placementMatrix = new THREE.Matrix4();
 let camera;
-let pinModel, pinVertices, fY_floor, pinHeight;
+let pinModel, boneModel, ballModel, skullBallModel, pinVertices, fY_floor, pinHeight, originalLaneTexture, originalGutterTexture;
 let floorOffset = parseFloat(localStorage.getItem('floorOffset')) || 0;
 let resetButtonState = [false, false];
 let endSessionButtonState = [false, false];
 let gripButtonState = [false, false];
 let triggerState = [false, false];
 let gameMode = localStorage.getItem('gameMode') || 'freeplay';
+let currentTheme = localStorage.getItem('bowlingTheme') || 'Normal';
 let pinsFallenResetTimer = null;
 let rollCompletionTimer = null;
 let allPinsFallen = false;
@@ -182,6 +185,7 @@ let optionsMenu = null;
 let menuButtonState = false;
 let hudButtonState = [false, false];
 let selectedMenuIndex = 0;
+let activeMenu = 'main'; // 'main' or 'theme'
 let thumbstickYState = [0, 0]; // 0: neutral, 1: up, -1: down
 let thumbstickXState = [0, 0]; // 0: neutral, 1: right, -1: left
 let audioManager;
@@ -208,20 +212,56 @@ let sceneSetupInitiated = false;
 function createOptionsMenu() {
     const menu = new THREE.Group();
     menu.name = "optionsMenu";
-    menu.userData.buttons = [];
+
+    // --- Main Menu ---
+    const mainMenu = new THREE.Group();
+    mainMenu.name = "mainMenu";
+    mainMenu.userData.buttons = [];
+    menu.add(mainMenu);
+
+    // --- Theme Submenu ---
+    const themeMenu = new THREE.Group();
+    themeMenu.name = "themeMenu";
+    themeMenu.userData.buttons = [];
+    themeMenu.visible = false;
+    menu.add(themeMenu);
 
     const panelGeo = new THREE.PlaneGeometry(0.6, 0.5);
     const panelMat = new THREE.MeshBasicMaterial({ color: 0x222222, transparent: true, opacity: 0.9 });
-    const panel = new THREE.Mesh(panelGeo, panelMat);
-    menu.add(panel);
+    const mainPanel = new THREE.Mesh(panelGeo, panelMat);
+    mainMenu.add(mainPanel);
+    const themePanel = new THREE.Mesh(panelGeo, panelMat.clone());
+    themeMenu.add(themePanel);
+
+
+    const createButton = (text, yPos, action, value = null) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const context = canvas.getContext('2d');
+        const texture = new THREE.CanvasTexture(canvas);
+        const geometry = new THREE.PlaneGeometry(0.5, 0.12);
+        const material = new THREE.MeshBasicMaterial({ map: texture });
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.position.y = yPos;
+        mesh.position.z = 0.01;
+        mesh.name = `button_${text.replace(' ', '')}`;
+        mesh.userData = {
+            isButton: true,
+            canvas,
+            context,
+            text,
+            action,
+            value
+        };
+        return mesh;
+    };
 
     const updateButtonAppearance = (button, selected) => {
-        const context = button.userData.context;
-        const canvas = button.userData.canvas;
-        const text = button.userData.mode === 'freeplay' ? 'Free Play' : 'Scoring';
+        const { context, canvas, text } = button.userData;
         context.fillStyle = '#444';
         context.fillRect(0, 0, canvas.width, canvas.height);
-        context.strokeStyle = selected ? '#0F0' : '#888'; // Green for selected, grey for default
+        context.strokeStyle = selected ? '#0F0' : '#888';
         context.lineWidth = 10;
         context.strokeRect(0, 0, canvas.width, canvas.height);
         context.fillStyle = 'white';
@@ -232,38 +272,42 @@ function createOptionsMenu() {
         button.material.map.needsUpdate = true;
     };
 
-    function createButton(text, yPos, mode) {
-        const canvas = document.createElement('canvas');
-        canvas.width = 512;
-        canvas.height = 128;
-        const context = canvas.getContext('2d');
-        const texture = new THREE.CanvasTexture(canvas);
-        const geometry = new THREE.PlaneGeometry(0.5, 0.15);
-        const material = new THREE.MeshBasicMaterial({ map: texture });
-        const mesh = new THREE.Mesh(geometry, material);
-        mesh.position.y = yPos;
-        mesh.position.z = 0.01;
-        mesh.name = `button_${mode}`;
-        mesh.userData.mode = mode;
-        mesh.userData.isButton = true;
-        mesh.userData.canvas = canvas;
-        mesh.userData.context = context;
-        updateButtonAppearance(mesh, false);
-        return mesh;
-    }
 
-    const freePlayButton = createButton('Free Play', 0.1, 'freeplay');
-    const scoringButton = createButton('Scoring', -0.1, 'scoring');
-    menu.add(freePlayButton);
-    menu.add(scoringButton);
-    menu.userData.buttons.push(freePlayButton);
-    menu.userData.buttons.push(scoringButton);
+    // Main Menu Buttons
+    const freePlayButton = createButton('Free Play', 0.15, 'setGameMode', 'freeplay');
+    const scoringButton = createButton('Scoring', 0.0, 'setGameMode', 'scoring');
+    const themeButton = createButton('Theme', -0.15, 'openThemeMenu');
+    mainMenu.add(freePlayButton, scoringButton, themeButton);
+    mainMenu.userData.buttons.push(freePlayButton, scoringButton, themeButton);
+
+    // Theme Menu Buttons
+    const normalThemeButton = createButton('Normal', 0.1, 'setTheme', 'Normal');
+    const halloweenThemeButton = createButton('Halloween', -0.1, 'setTheme', 'Halloween');
+    themeMenu.add(normalThemeButton, halloweenThemeButton);
+    themeMenu.userData.buttons.push(normalThemeButton, halloweenThemeButton);
+
 
     menu.userData.update = () => {
-        menu.userData.buttons.forEach((btn, index) => {
+        const currentButtons = activeMenu === 'main' ? mainMenu.userData.buttons : themeMenu.userData.buttons;
+        currentButtons.forEach((btn, index) => {
             updateButtonAppearance(btn, index === selectedMenuIndex);
         });
+        // Also initialize the appearance of the non-active menu buttons
+        const nonActiveButtons = activeMenu !== 'main' ? mainMenu.userData.buttons : themeMenu.userData.buttons;
+        nonActiveButtons.forEach(btn => updateButtonAppearance(btn, false));
     };
+
+    menu.userData.show = () => {
+        activeMenu = 'main';
+        mainMenu.visible = true;
+        themeMenu.visible = false;
+        // Find index of current game mode and set it as selected
+        const currentModeIndex = mainMenu.userData.buttons.findIndex(button => button.userData.value === gameMode);
+        selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
+        menu.userData.update();
+        menu.visible = true;
+    };
+
 
     menu.visible = false;
     scene.add(menu);
@@ -780,6 +824,8 @@ async function main() {
     eventQueue = new RAPIER.EventQueue(true);
     world.integrationParameters.dt = 1/120;
 
+    await init();
+
     const urlParams = new URLSearchParams(window.location.search);
     const isTestMode = urlParams.has('test');
 
@@ -787,16 +833,16 @@ async function main() {
         // In test mode, bypass AR and set up the scene directly
         sceneSetupInitiated = true;
         fY_floor = 0; // Assume flat ground for testing
-        (async () => {
-            await placeScene(fY_floor, loader, world, dynamicObjects);
-            updateGameModeUI();
-            // Expose functions for Playwright testing
-            window.createConfirmationDialog = createConfirmationDialog;
-            window.renderer = renderer;
-            window.scene = scene;
-            window.getBallContacts = getBallContacts;
-            window.testModeReady = true; // Signal that the test environment is ready
-        })();
+        await placeScene(fY_floor, loader, world, dynamicObjects);
+        updateGameModeUI();
+        // Expose functions for Playwright testing
+        window.createConfirmationDialog = createConfirmationDialog;
+        window.renderer = renderer;
+        window.scene = scene;
+        window.getBallContacts = getBallContacts;
+        window.optionsMenu = optionsMenu;
+        window.applyTheme = applyTheme;
+        window.testModeReady = true; // Signal that the test environment is ready
     } else {
         // Standard AR mode initialization
         const arButton = ARButton.createButton(renderer, {
@@ -834,8 +880,6 @@ async function main() {
             });
         }
     }
-
-    init();
 }
 
 function animate(timestamp, frame) {
@@ -944,7 +988,10 @@ function animate(timestamp, frame) {
         if (ball) {
             const controllerGrip = renderer.xr.getControllerGrip(holdingController.userData.controllerId);
             ball.body.setNextKinematicTranslation(controllerGrip.position);
-            ball.body.setNextKinematicRotation(controllerGrip.quaternion);
+            //ball.body.setNextKinematicRotation(controllerGrip.quaternion);
+            const combinedRotation = new THREE.Quaternion().copy(controllerGrip.quaternion);
+            combinedRotation.multiply(correctiveRotation);
+            ball.body.setNextKinematicRotation(combinedRotation);
         }
     }
 
@@ -1007,7 +1054,7 @@ function animate(timestamp, frame) {
                     pinsFallenResetTimer = setTimeout(() => {
                         resetPins();
                         pinsFallenResetTimer = null;
-                    }, 5000);
+                    }, 3000);
                 }
             }
         }
@@ -1070,7 +1117,10 @@ function animate(timestamp, frame) {
             const currentQuaternion = controller.quaternion.clone();
             const deltaQuaternion = currentQuaternion.clone().multiply(controller.userData.lastQuaternion.clone().invert());
 
-            let angle = 2 * Math.acos(deltaQuaternion.w);
+            //let angle = 2 * Math.acos(deltaQuaternion.w);
+            // Clamp the value to prevent Math.acos from returning NaN
+            const clampedW = Math.max(-1, Math.min(1, deltaQuaternion.w));
+            let angle = 2 * Math.acos(clampedW);
             if (angle > Math.PI) {
                 angle -= 2 * Math.PI;
             }
@@ -1139,28 +1189,24 @@ function animate(timestamp, frame) {
 
                     // --- Options Menu Dialog ---
                     if (optionsMenu && optionsMenu.visible) {
-                        const buttons = optionsMenu.userData.buttons;
-                        // Navigation with thumbsticks (either controller)
+                        const menu = optionsMenu.getObjectByName(activeMenu === 'main' ? 'mainMenu' : 'themeMenu');
+                        const buttons = menu.userData.buttons;
+
+                        // Navigation with thumbsticks
                         const thumbstickY = controller.gamepad.axes[3];
                         if (thumbstickY < -0.5 && thumbstickYState[i] !== -1) { // Up
                             thumbstickYState[i] = -1;
-                            const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.max(0, selectedMenuIndex - 1);
-                            if (oldIndex !== selectedMenuIndex) {
-                                optionsMenu.userData.update();
-                            }
+                            optionsMenu.userData.update();
                         } else if (thumbstickY > 0.5 && thumbstickYState[i] !== 1) { // Down
                             thumbstickYState[i] = 1;
-                            const oldIndex = selectedMenuIndex;
                             selectedMenuIndex = Math.min(buttons.length - 1, selectedMenuIndex + 1);
-                            if (oldIndex !== selectedMenuIndex) {
-                                optionsMenu.userData.update();
-                            }
+                            optionsMenu.userData.update();
                         } else if (Math.abs(thumbstickY) < 0.2) { // Neutral
                             thumbstickYState[i] = 0;
                         }
 
-                        // Confirm selection with A/X/Trigger (buttons 0, 4)
+                        // Confirm selection
                         const confirmButtonPressed = (controller.gamepad.buttons[0].pressed && !triggerState[i]) || (controller.gamepad.buttons[4].pressed && !resetButtonState[i]);
                         if (confirmButtonPressed) {
                             if (controller.gamepad.buttons[0].pressed) triggerState[i] = true;
@@ -1168,17 +1214,48 @@ function animate(timestamp, frame) {
 
                             const selectedButton = buttons[selectedMenuIndex];
                             if (selectedButton) {
-                                gameMode = selectedButton.userData.mode;
-                                localStorage.setItem('gameMode', gameMode);
-                                optionsMenu.visible = false;
-                                updateGameModeUI();
+                                const { action, value } = selectedButton.userData;
+                                switch (action) {
+                                    case 'setGameMode':
+                                        gameMode = value;
+                                        localStorage.setItem('gameMode', gameMode);
+                                        optionsMenu.visible = false;
+                                        updateGameModeUI();
+                                        break;
+                                    case 'openThemeMenu':
+                                        activeMenu = 'theme';
+                                        optionsMenu.getObjectByName('mainMenu').visible = false;
+                                        optionsMenu.getObjectByName('themeMenu').visible = true;
+                                        const themeIndex = optionsMenu.getObjectByName('themeMenu').userData.buttons.findIndex(b => b.userData.value === currentTheme);
+                                        selectedMenuIndex = themeIndex !== -1 ? themeIndex : 0;
+                                        optionsMenu.userData.update();
+                                        break;
+                                    case 'setTheme':
+                                        currentTheme = value;
+                                        localStorage.setItem('bowlingTheme', currentTheme);
+                                        applyTheme(currentTheme);
+                                        activeMenu = 'main';
+                                        optionsMenu.getObjectByName('themeMenu').visible = false;
+                                        optionsMenu.getObjectByName('mainMenu').visible = true;
+                                        selectedMenuIndex = 0; // Reset to top of main menu
+                                        optionsMenu.userData.update();
+                                        break;
+                                }
                             }
                         }
 
-                        // Cancel with B/Y (button 5)
+                        // Cancel/Back with B/Y
                         if (controller.gamepad.buttons[5].pressed && !endSessionButtonState[i]) {
                             endSessionButtonState[i] = true;
-                            optionsMenu.visible = false; // Just close it
+                            if (activeMenu === 'theme') {
+                                activeMenu = 'main';
+                                optionsMenu.getObjectByName('themeMenu').visible = false;
+                                optionsMenu.getObjectByName('mainMenu').visible = true;
+                                selectedMenuIndex = 0;
+                                optionsMenu.userData.update();
+                            } else {
+                                optionsMenu.visible = false;
+                            }
                         }
                     }
 
@@ -1274,25 +1351,11 @@ function animate(timestamp, frame) {
                     if (controller.gamepad.buttons[12] && controller.gamepad.buttons[12].pressed && !menuButtonState) {
                         menuButtonState = true;
                         if (optionsMenu) {
-                            // If menu is already visible, this press is a CONFIRM action
                             if (optionsMenu.visible) {
-                                const selectedButton = optionsMenu.userData.buttons[selectedMenuIndex];
-                                if (selectedButton) {
-                                    gameMode = selectedButton.userData.mode;
-                                    localStorage.setItem('gameMode', gameMode);
-                                    updateGameModeUI();
-                                }
                                 optionsMenu.visible = false;
                             } else {
-                                // If menu is not visible, this press OPENS it
-                                optionsMenu.visible = true;
-
-                                // Find index of current game mode and set it as selected
-                                const currentModeIndex = optionsMenu.userData.buttons.findIndex(button => button.userData.mode === gameMode);
-                                selectedMenuIndex = currentModeIndex !== -1 ? currentModeIndex : 0;
-                                optionsMenu.userData.update();
-
-                                // Position the options menu above the lane, similar to the scoreboard
+                                optionsMenu.userData.show();
+                                // Position the options menu
                                 if (laneObject) {
                                     const lanePosition = laneObject.mesh.position;
                                     optionsMenu.position.set(lanePosition.x, lanePosition.y + 1.5, lanePosition.z - 2);
@@ -1300,7 +1363,6 @@ function animate(timestamp, frame) {
                                         optionsMenu.quaternion.copy(scoreboard.quaternion);
                                     }
                                 } else {
-                                    // Fallback position if the lane doesn't exist yet
                                     optionsMenu.position.set(0, 1.5, -3);
                                 }
                             }
@@ -1333,13 +1395,32 @@ function animate(timestamp, frame) {
 }
 
 async function placeScene(fY, loader, world, dynamicObjects) {
-    // Load Lane Model
-    const laneGltf = await loader.loadAsync('3d/bowling.glb');
+    // Load Models
+    const [laneGltf, skullGltf] = await Promise.all([
+        loader.loadAsync('3d/bowling.glb'),
+        loader.loadAsync('3d/skull.glb')
+    ]);
 
-        // Visual ground and Physics Ground
-        const groundMesh = laneGltf.scene;
+    // Process Skull model for the ball
+    const loadedSkullMesh = skullGltf.scene.getObjectByProperty('type', 'Mesh');
+    if (loadedSkullMesh) {
+        const correctedGeometry = loadedSkullMesh.geometry.clone();
+        const parentMatrix = loadedSkullMesh.parent ? loadedSkullMesh.parent.matrixWorld : new THREE.Matrix4();
+        correctedGeometry.applyMatrix4(parentMatrix);
+        correctedGeometry.applyMatrix4(loadedSkullMesh.matrix);
+        correctedGeometry.computeBoundingBox();
+        const trueCenter = new THREE.Vector3();
+        correctedGeometry.boundingBox.getCenter(trueCenter);
+        correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+        skullBallModel = new THREE.Mesh(correctedGeometry, loadedSkullMesh.material.clone());
+    } else {
+        console.error("No mesh found in skull.glb for the ball");
+    }
 
-        // Create a fixed rigid body for the lane at the origin.
+    // Visual ground and Physics Ground
+    const groundMesh = laneGltf.scene;
+
+    // Create a fixed rigid body for the lane at the origin.
         // We will set its final position after creating all components.
         const laneBodyDesc = RAPIER.RigidBodyDesc.fixed();
         const laneBody = world.createRigidBody(laneBodyDesc);
@@ -1355,10 +1436,14 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Create colliders for the lane and gutter from the bowling.glb model
     groundMesh.traverse(child => {
         if (child.isMesh) {
+         //console.log(child);
             child.updateMatrixWorld(true); // Ensure world matrix is up-to-date
             const bodyPosition = new THREE.Vector3(laneBody.translation().x, laneBody.translation().y, laneBody.translation().z);
 
             if (child.name === 'lane') {
+                if (child.isMesh && child.material && child.material.map) {
+                    originalLaneTexture = child.material.map;
+                }
               //child.visible = false;
                 // Create a box collider for the lane for more reliable physics
                 const boundingBox = new THREE.Box3().setFromObject(child);
@@ -1388,6 +1473,9 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                 }
 
             } else if (child.name === 'gutter') {
+                if (child.isMesh && child.material && child.material.map) {
+                    originalGutterTexture = child.material.map;
+                }
                 // Create a trimesh collider for the gutter to match its complex shape
                 const originalVertices = child.geometry.attributes.position.array;
                 const transformedVertices = new Float32Array(originalVertices.length);
@@ -1422,6 +1510,7 @@ async function placeScene(fY, loader, world, dynamicObjects) {
                     laneCollisionVisualizer.add(visualizerMesh);
                 }
             } else if (child.name === 'ball') {
+                ballModel = child; // Store the original ball model
                 ballMesh = child;
             } else if (child.name === 'pin') {
                 pinModel = child;
@@ -1452,23 +1541,32 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     // Apply initial floor offset from localStorage
     updateFloorAndLanePosition();
 
+    // Apply the current theme
+    await applyTheme(currentTheme);
+
     // Create Bowling Ball
-    // The ball is now loaded from the bowling.glb file.
-    // We need to remove it from its original parent to treat it as a separate dynamic object.
-    if (ballMesh && ballMesh.parent) {
-        ballMesh.parent.remove(ballMesh);
+    // Physics are derived from the original ball model
+    if (ballModel && ballModel.parent) {
+        ballModel.parent.remove(ballModel);
     }
-    const ballBox = new THREE.Box3().setFromObject(ballMesh);
-
-    // Center the geometry
-    const center = ballBox.getCenter(new THREE.Vector3());
-    //if (ballMesh.isMesh) {
-        //ballMesh.geometry.translate(-center.x, -center.y, -center.z);
-    //}
-    ballBox.setFromObject(ballMesh); // Recalculate the box after centering
-
+    const ballBox = new THREE.Box3().setFromObject(ballModel);
     const ballSize = ballBox.getSize(new THREE.Vector3());
     const ballRadius = ballSize.x / 2;
+
+    // Determine which mesh to use based on the theme
+    let displayMesh;
+    if (currentTheme === 'Halloween' && skullBallModel) {
+        displayMesh = skullBallModel.clone();
+        // Scale the skull to be a similar size to the ball
+        const skullBox = new THREE.Box3().setFromObject(displayMesh);
+        const skullSize = skullBox.getSize(new THREE.Vector3());
+        if (skullSize.x > 0) {
+            const scale = ballSize.x / skullSize.x;
+            displayMesh.scale.set(scale, scale, scale);
+        }
+    } else {
+        displayMesh = ballModel.clone();
+    }
 
     const ballInitialPosition = { x: 0, y: fY + 0.5, z: -1 };
     const ballBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(ballInitialPosition.x, ballInitialPosition.y, ballInitialPosition.z).setCcdEnabled(true);
@@ -1477,11 +1575,11 @@ async function placeScene(fY, loader, world, dynamicObjects) {
     ballColliderDesc.userData = { name: 'ball' };
     const ballCollider = world.createCollider(ballColliderDesc, ballBody);
 
-    const ballObject = { mesh: ballMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true, name: 'ball' };
+    const ballObject = { mesh: displayMesh, body: ballBody, collider: ballCollider, initialPosition: ballInitialPosition, isBall: true, name: 'ball' };
     dynamicObjects.push(ballObject);
     colliderToObjectMap.set(ballCollider.handle, ballObject);
-    scene.add(ballMesh);
-    ballMesh.visible = true;
+    scene.add(displayMesh);
+    displayMesh.visible = true;
 
     // Create Bowling Pins
      //const pinGltf = await loader.loadAsync('3d/pin.glb');
@@ -1602,7 +1700,12 @@ function createPins(fY) {
     let pinIdCounter = 0;
 
     function createPin(x, z, id) {
-        const pinMesh = pinModel.clone();
+        let pinMesh;
+        if (currentTheme === 'Halloween' && boneModel) {
+            pinMesh = boneModel.clone();
+        } else {
+            pinMesh = pinModel.clone();
+        }
         // Spawn the pin with its center of mass raised by half its height, so its base rests on the floor.
         const initialPosition = { x: x, y: fY + (pinHeight / 2), z: z };
         const pinBodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(initialPosition.x, initialPosition.y, initialPosition.z);
@@ -1629,7 +1732,7 @@ function createPins(fY) {
         pinMesh.visible = true;
     }
 
-    const pinSpacing = 0.155;
+    const pinSpacing = 0.16;
     const pinStartZ = -7; //where pins are located!
     
     for (let row = 0; row < 4; row++) {
@@ -1684,6 +1787,8 @@ function resetBall() {
         const initialPos = ball.initialPosition;
         const resetY = fY_floor + floorOffset + (initialPos.y - fY_floor);
         ball.body.setTranslation({ x: initialPos.x, y: resetY, z: initialPos.z }, true);
+        
+        ball.body.setRotation({ x: 0, y: 0, z: 0, w: 1 }, true);
 
         // Reset velocities
         ball.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
@@ -1870,6 +1975,108 @@ function createConfirmationDialog(title, buttons, renderer) {
     }
 
     return dialog;
+}
+
+async function applyTheme(theme) {
+    const laneMesh = laneObject.mesh.getObjectByName('lane');
+    const gutterMesh = laneObject.mesh.getObjectByName('gutter');
+
+    if (theme === 'Halloween') {
+        // Apply blood texture to the lane and gutter
+        const textureLoader = new THREE.TextureLoader();
+        const bloodTexture = textureLoader.load('3d/blood.png');
+        bloodTexture.wrapS = THREE.RepeatWrapping;
+        bloodTexture.wrapT = THREE.RepeatWrapping;
+        //bloodTexture.repeat.set(20, 2); // Tile the texture
+
+        if (laneMesh && laneMesh.isMesh && laneMesh.material) {
+            laneMesh.material.map = bloodTexture;
+            laneMesh.material.needsUpdate = true;
+        }
+        if (gutterMesh && gutterMesh.isMesh && gutterMesh.material) {
+            gutterMesh.material.map = bloodTexture;
+            gutterMesh.material.needsUpdate = true;
+        }
+
+        if (!boneModel) { // Load only if not already loaded
+            try {
+                const boneGltf = await loader.loadAsync('3d/bone.glb');
+                const loadedMesh = boneGltf.scene.getObjectByProperty('type', 'Mesh');
+                if (loadedMesh) {
+                    // Pre-process the bone model geometry similar to the pin model
+                    const correctedGeometry = loadedMesh.geometry.clone();
+
+                    // It's better to apply the parent's matrix if the mesh isn't at the scene root
+                    const parentMatrix = loadedMesh.parent ? loadedMesh.parent.matrixWorld : new THREE.Matrix4();
+                    correctedGeometry.applyMatrix4(parentMatrix);
+                    correctedGeometry.applyMatrix4(loadedMesh.matrix);
+
+                    correctedGeometry.computeBoundingBox();
+                    const trueCenter = new THREE.Vector3();
+                    correctedGeometry.boundingBox.getCenter(trueCenter);
+                    correctedGeometry.translate(-trueCenter.x, -trueCenter.y, -trueCenter.z);
+
+                    boneModel = new THREE.Mesh(correctedGeometry, loadedMesh.material.clone());
+                } else {
+                    console.error("No mesh found in bone.glb");
+                }
+            } catch (error) {
+                console.error("Failed to load or process bone.glb:", error);
+            }
+        }
+    } else {
+        // Revert to the original textures for "Normal" theme
+        if (laneMesh && laneMesh.isMesh && laneMesh.material) {
+            laneMesh.material.map = originalLaneTexture;
+            laneMesh.material.needsUpdate = true;
+        }
+        if (gutterMesh && gutterMesh.isMesh && gutterMesh.material) {
+            gutterMesh.material.map = originalGutterTexture;
+            gutterMesh.material.needsUpdate = true;
+        }
+    }
+    // In 'Normal' mode, we don't need to do anything extra as pinModel is the default.
+
+    // If the game world exists, refresh the pins and ball to apply the theme.
+    if (world) {
+        // Refresh Pins
+        const pinsToRemove = dynamicObjects.filter(obj => obj.isPin);
+        if (pinsToRemove.length > 0) {
+            for (const pin of pinsToRemove) {
+                if (colliderToObjectMap.has(pin.collider.handle)) {
+                    colliderToObjectMap.delete(pin.collider.handle);
+                }
+                scene.remove(pin.mesh);
+                world.removeRigidBody(pin.body);
+            }
+            dynamicObjects = dynamicObjects.filter(obj => !obj.isPin);
+            createPins(fY_floor + floorOffset);
+        }
+
+        // Refresh Ball
+        const ballObject = dynamicObjects.find(obj => obj.isBall);
+        if (ballObject) {
+            scene.remove(ballObject.mesh); // Remove old mesh
+
+            let newMesh;
+            if (theme === 'Halloween' && skullBallModel) {
+                newMesh = skullBallModel.clone();
+                const ballBox = new THREE.Box3().setFromObject(ballModel);
+                const ballSize = ballBox.getSize(new THREE.Vector3());
+                const skullBox = new THREE.Box3().setFromObject(newMesh);
+                const skullSize = skullBox.getSize(new THREE.Vector3());
+                if (skullSize.x > 0) {
+                    const scale = ballSize.x / skullSize.x;
+                    newMesh.scale.set(scale, scale, scale);
+                }
+            } else {
+                newMesh = ballModel.clone();
+            }
+
+            ballObject.mesh = newMesh;
+            scene.add(newMesh);
+        }
+    }
 }
 
 function updateFloorAndLanePosition(yDelta = 0) {
