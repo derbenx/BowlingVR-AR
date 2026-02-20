@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="manifest" href="manifest.json" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Archery</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+    </style>
+        <script>
+ if (typeof navigator.serviceWorker !== 'undefined') {
+  navigator.serviceWorker.register('sw.js')
+ }
+    </script>
+</head>
+<body>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "./js/three/build/three.module.js",
+                "three/addons/": "./js/three/examples/jsm/",
+                "@dimforge/rapier3d-compat": "./js/rapier/rapier.mjs"
+            }
+        }
+    </script>
+    <script type="module" src="./main.js"></script>
+</body>
+</html>
